@@ -1,0 +1,6 @@
+.vscode/
+.claude/
+*.zip
+*.crx
+*.pem
+Thumbs.db

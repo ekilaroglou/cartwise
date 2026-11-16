@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffa13c"/><stop offset="1" stop-color="#ec5f12"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#bg)"/>
+  <!-- cart -->
+  <g fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20 30h12l11 46h46l9-32H39"/>
+  </g>
+  <circle cx="49" cy="94" r="8" fill="#fff"/>
+  <circle cx="84" cy="94" r="8" fill="#fff"/>
+  <!-- price-down badge -->
+  <circle cx="96" cy="34" r="22" fill="#14a35a" stroke="#fff" stroke-width="5"/>
+  <path d="M96 22v22M86 36l10 10 10-10" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

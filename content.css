@@ -1,0 +1,19 @@
+#sco-add-button {
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 2147483000;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 999px;
+  background: #f68b24;
+  color: #fff;
+  font: 600 14px/1.2 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .25);
+  cursor: pointer;
+  transition: transform .12s ease, background .12s ease;
+}
+#sco-add-button:hover { background: #e07610; transform: translateY(-1px); }
+#sco-add-button.sco-added { background: #14804a; }
+#sco-add-button.sco-added:hover { background: #0f6a3c; }
+#sco-add-button[hidden] { display: none; }

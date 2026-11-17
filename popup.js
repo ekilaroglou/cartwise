@@ -16,8 +16,7 @@ const state = {
   // {id: 'bp<itemId>', name, bpItem: {id, url, name}, qty, searched, skCands}
   cart: [],
   // avail: 'any' | 'stock' | 'now'; maxDays: 0 (any) or a number of days
-  settings: { hasPlus: false, delivery: 'point', bestprice: true, avail: 'any', maxDays: 0 },
-  lockEdit: null,                             // product whose "buy from this shop" chooser is open
+  settings: { hasPlus: false, delivery: 'point', bestprice: true, avail: 'any', maxDays: 0, cartHidden: false },
   long: {},                                   // result tab -> inputs it was asked to search longer for
   openTab: null,                              // result tab whose details are open (none when the popup opens)
   offers: {},                                 // id -> {ts, name, offers, titles}
@@ -65,6 +64,12 @@ async function load() {
   }
   state.history = Array.isArray(data.history) ? data.history : [];
   state.cart = Array.isArray(data.cart) ? data.cart : [];
+  // "buy from a specific shop" was removed: forget choices saved by that version
+  if (state.cart.some((p) => 'lock' in p)) {
+    for (const p of state.cart) delete p.lock;
+    chrome.storage.local.set({ cart: state.cart });
+  }
+
   Object.assign(state.settings, data.settings || {});
   state.offers = {};
   for (const [id, o] of Object.entries(data.offers || {})) if (o && o.v === OFFERS_VER) state.offers[id] = o;
@@ -345,10 +350,7 @@ function adopt(phId, cand, page) {
     offers: page ? page.offers : null, offersTs: page ? Date.now() : 0,
   };
   if (state.cart.some((p) => p.id === cand.id)) state.cart.splice(i, 1);
-  else {
-    state.cart[i] = { id: cand.id, url: cand.url, name: cand.name, image: cand.image || null, mpn: cand.mpn, brand: cand.brand, qty: ph.qty || 1 };
-    if (ph.lock) state.cart[i].lock = ph.lock; // a BestPrice merchant chosen before the match
-  }
+  else state.cart[i] = { id: cand.id, url: cand.url, name: cand.name, image: cand.image || null, mpn: cand.mpn, brand: cand.brand, qty: ph.qty || 1 };
   delete state.bp[phId];
   delete state.phStatus[phId];
   saveCart();
@@ -460,7 +462,7 @@ function undo() {
   for (const item of state.cart) if (!isPh(item) && !item.image) fetchMeta(item);
 }
 
-// ---------- offers of a product: both sites, shop choice, availability ----------
+// ---------- offers of a product: both sites, availability ----------
 /** The product's offers on each site, as loaded. */
 function rawOffers(item) {
   const ph = isPh(item);
@@ -474,24 +476,13 @@ function rawOffers(item) {
 /**
  * The offers the search may use for a product. BestPrice merchants get their
  * own ids, so they are never merged with a Skroutz store of the same number
- * (or its Plus eligibility). A chosen shop ("buy only from…") narrows both
- * lists down to that shop; if the shop no longer sells it, the choice is ignored.
+ * (or its Plus eligibility).
  */
 function sources(item) {
   const raw = rawOffers(item);
-  let sk = raw.sk;
-  let bp = raw.bp.map((o) => ({ ...o, shopId: 'bp' + o.shopId }));
-  let lockLost = false;
-  if (item.lock) {
-    const fromBp = item.lock.src === 'bp';
-    const pick = (fromBp ? bp : sk).filter((o) => o.shopId === (fromBp ? 'bp' : '') + item.lock.shopId);
-    if (pick.length) { sk = fromBp ? [] : pick; bp = fromBp ? pick : []; }
-    else lockLost = fromBp ? !!(state.bp[item.id] && state.bp[item.id].offers) : !!state.offers[item.id];
-  }
-  return { sk, bp, lockLost };
+  return { sk: raw.sk, bp: raw.bp.map((o) => ({ ...o, shopId: 'bp' + o.shopId })) };
 }
 
-const filtersOn = () => (state.settings.avail && state.settings.avail !== 'any') || !!+state.settings.maxDays;
 function passes(o) {
   const s = state.settings;
   if (s.avail === 'stock' && o.stock === false) return false;
@@ -500,34 +491,7 @@ function passes(o) {
   return true;
 }
 
-function setLock(id, value) {
-  const item = state.cart.find((p) => p.id === id);
-  if (!item) return;
-  let lock = null;
-  if (value) {
-    const src = value.slice(0, 2);
-    const shopId = value.slice(3);
-    const raw = rawOffers(item);
-    const o = (src === 'bp' ? raw.bp : raw.sk).find((x) => x.shopId === shopId);
-    if (!o) return;
-    lock = { src, shopId, shopName: o.shopName };
-  }
-  remember();
-  if (lock) item.lock = lock; else delete item.lock;
-  state.lockEdit = null;
-  saveCart();
-  render();
-}
-
 // ---------- rendering: products ----------
-const LOCK_ICON = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
-function icon(svg) {
-  const el = document.createElement('span');
-  el.className = 'ico';
-  el.innerHTML = svg; // constant markup from this file only
-  return el;
-}
-
 function placeholderMeta(item) {
   const status = state.phStatus[item.id];
   if (status === 'loading' || (!item.searched && status !== 'error')) return h('div', { class: 'p-meta dots' }, t('findingOnSk'));
@@ -564,33 +528,6 @@ function productMeta(item) {
     hub && ' · ', hub && h('span', { class: 'badge hub' }, 'Hub'));
 }
 
-/** "Buy this product only from…": the chooser while it is open, else the current choice. */
-function lockRow(item) {
-  if (state.lockEdit === item.id) {
-    const raw = rawOffers(item);
-    const shops = (offers) => {
-      const m = new Map();
-      for (const o of offers) {
-        const e = m.get(o.shopId);
-        if (!e || o.price < e.price) m.set(o.shopId, { id: o.shopId, name: o.shopName, price: o.price });
-      }
-      return [...m.values()].sort((a, b) => a.price - b.price);
-    };
-    const cur = item.lock ? `${item.lock.src}:${item.lock.shopId}` : '';
-    const group = (label, src, offers) => offers.length > 0 && h('optgroup', { label },
-      shops(offers).map((s) => h('option', { value: `${src}:${s.id}`, selected: cur === `${src}:${s.id}` }, `${s.name} · ${eur(s.price)}`)));
-    return h('div', { class: 'p-pick' },
-      h('select', { 'aria-label': t('lockLabel'), onchange: (e) => setLock(item.id, e.target.value) },
-        h('option', { value: '', selected: !cur }, t('anyShop')),
-        group('Skroutz', 'sk', raw.sk),
-        group('BestPrice', 'bp', raw.bp)));
-  }
-  if (!item.lock) return null;
-  const lost = sources(item).lockLost;
-  return h('div', { class: 'p-lock' + (lost ? ' err' : '') }, icon(LOCK_ICON),
-    h('span', {}, t(lost ? 'lockLost' : 'lockedTo', { shop: item.lock.shopName })));
-}
-
 function renderProducts() {
   $('products').replaceChildren(...state.cart.map((item) => h('li', { class: 'product' },
     item.image
@@ -598,22 +535,23 @@ function renderProducts() {
       : h('div', { class: 'thumb-img blank' }, '🛒'),
     h('div', { class: 'p-main' },
       h('a', { class: 'p-name', href: productUrl(item), target: '_blank', rel: 'noreferrer', title: item.name }, item.name),
-      productMeta(item),
-      lockRow(item)),
+      productMeta(item)),
     h('div', { class: 'p-side' },
       h('div', { class: 'qty' },
         h('button', { onclick: () => setQty(item.id, -1), 'aria-label': t('less') }, '−'),
         h('span', {}, item.qty || 1),
         h('button', { onclick: () => setQty(item.id, 1), 'aria-label': t('more') }, '+')),
-      h('button', {
-        class: 'lock-btn' + (item.lock ? ' on' : ''), title: t('lockTitle'), 'aria-label': t('lockTitle'),
-        'aria-expanded': String(state.lockEdit === item.id),
-        onclick: () => { state.lockEdit = state.lockEdit === item.id ? null : item.id; renderProducts(); },
-      }, icon(LOCK_ICON)),
       h('button', { class: 'remove', title: t('remove'), 'aria-label': t('remove'), onclick: () => removeProduct(item.id) }, '×')))));
   $('count').textContent = state.cart.length;
   $('clear').disabled = state.cart.length === 0;
   $('undo').disabled = state.history.length === 0;
+  const folded = !!state.settings.cartHidden && state.cart.length > 0;
+  $('products').hidden = folded;
+  $('undo').hidden = folded;
+  $('clear').hidden = folded;
+  $('cart-toggle').hidden = state.cart.length === 0;
+  $('cart-toggle').textContent = t(folded ? 'show' : 'hide');
+  $('cart-toggle').setAttribute('aria-expanded', String(!folded));
 }
 
 // ---------- rendering: result cards ----------
@@ -623,7 +561,7 @@ function shipmentView(s, ctx, hideHead = false) {
     ? [h('span', { class: 'badge hub' }, 'Skroutz Hub'), h('span', {}, s.shops.join(' + '))]
     : [s.showSrc && h('span', { class: 'badge ' + (s.src === 'BestPrice' ? 'bp' : 'sk') }, s.src), h('span', {}, s.shops[0])];
   const ship = s.fee > 0
-    ? h('span', { class: 'v' }, (s.feeEstimated ? '≈ ' : '') + eur(s.fee))
+    ? h('span', { class: 'v' }, eur(s.fee))
     : h('span', { class: 'v free' }, s.feeReason === 'plus' ? t('freePlus') : t('free'));
   return h('div', { class: 'shipment' },
     !hideHead && h('div', { class: 's-head' }, title),
@@ -642,6 +580,35 @@ function shipmentView(s, ctx, hideHead = false) {
     h('div', { class: 'row ship' }, h('span', { class: 'n' }, t('shipping')), ship));
 }
 
+/** The Skroutz offers of a result, as the Skroutz cart needs them. */
+function skroutzItems(sol) {
+  const items = [];
+  for (const s of sol.shipments) {
+    if (s.key.startsWith('sbp')) continue; // BestPrice merchants are bought on their own sites
+    for (const it of s.items) if (it.cardId) items.push({ sku: String(it.productId), card: String(it.cardId), qty: it.qty || 1, name: it.name });
+  }
+  return items;
+}
+
+/**
+ * Hands the chosen offers to the page script, which puts them in the Skroutz
+ * cart from a skroutz.gr tab (so it is the user's own cart, logged in or not).
+ */
+async function sendToSkroutzCart(items) {
+  if (!items.length) return;
+  await chrome.storage.local.set({ cartJob: { ts: Date.now(), items } });
+  chrome.tabs.create({ url: `${ORIGIN}/cart#cartwise` });
+}
+
+function cartButton(sol) {
+  const items = skroutzItems(sol);
+  if (!items.length) return null;
+  const mixed = sol.shipments.some((s) => s.key.startsWith('sbp'));
+  return h('div', { class: 'r-actions' },
+    h('button', { class: 'btn primary', type: 'button', onclick: () => sendToSkroutzCart(items) },
+      t(mixed ? 'addSkPartToCart' : 'addToSkCart')));
+}
+
 function resultCard({ kicker, title, sol, badge, note, warn, extra }, ctx) {
   return h('article', { class: 'result' },
     h('div', { class: 'r-head' },
@@ -656,6 +623,7 @@ function resultCard({ kicker, title, sol, badge, note, warn, extra }, ctx) {
     warn,
     // a lone store shipment would just repeat the card title
     sol.shipments.map((s) => shipmentView(s, ctx, sol.shipments.length === 1 && !s.hub && !s.showSrc && s.shops[0] === title)),
+    cartButton(sol),
     extra);
 }
 
@@ -686,7 +654,7 @@ function requestCalc(tab, key, products, settings) {
 /** Drops whatever is running (its inputs are out of date) and queues every unfinished tab. */
 function runWorker() {
   workerTimer = null;
-  const todo = ['skroutz', 'bestprice', 'overall'].filter((tab) => calc[tab] && !calc[tab].result);
+  const todo = ['skroutz', 'overall'].filter((tab) => calc[tab] && !calc[tab].result);
   if (!todo.length) return;
   try {
     if (worker) worker.terminate();
@@ -714,15 +682,15 @@ function calcHere(tab) {
 /** Products and offers for one tab. */
 function tabProducts(kind, list) {
   const products = [];
-  const info = { other: 0, unfiltered: [], missing: [] };
+  const info = { other: 0, filtered: [], missing: [] }; // filtered: products the availability settings leave without an offer
   for (const { item, sk, bp } of list) {
     let offers;
+    // Skroutz tab: a product Skroutz does not sell is priced from BestPrice
     if (kind === 'skroutz') { offers = sk.length ? sk : bp; if (!sk.length && bp.length) info.other++; }
-    else if (kind === 'bestprice') { offers = bp.length ? bp : sk; if (!bp.length && sk.length) info.other++; }
     else offers = [...sk, ...bp];
     if (!offers.length) { info.missing.push(item.id); continue; }
-    const ok = offers.filter(passes);
-    if (ok.length) offers = ok; else if (filtersOn()) info.unfiltered.push(item.id);
+    offers = offers.filter(passes);
+    if (!offers.length) { info.filtered.push(item.name); continue; }
     products.push({ id: item.id, name: item.name, qty: item.qty || 1, offers });
   }
   return { products, info };
@@ -750,7 +718,7 @@ function compute() {
   const list = state.cart.map((item) => ({ item, ...sources(item) }));
   const s = state.settings;
   const sig = [s.hasPlus ? 1 : 0, s.delivery, s.avail || 'any', +s.maxDays || 0, c.bpOn ? 1 : 0, state.bpAccess === false ? 0 : 1,
-    ...state.cart.map((p) => [p.id, p.qty || 1, p.lock ? p.lock.src + p.lock.shopId : '',
+    ...state.cart.map((p) => [p.id, p.qty || 1,
       (state.offers[p.id] && state.offers[p.id].ts) || 0,
       (state.bp[p.id] && state.bp[p.id].offersTs) || 0,
       (state.bp[p.id] && state.bp[p.id].item && state.bp[p.id].item.id) || ''].join(':'))].join('|');
@@ -759,18 +727,16 @@ function compute() {
     const { products, info } = tabProducts(kind, list);
     const tab = { info, base: `${kind}|${sig}` };
     if (info.missing.length) { tab.block = t('removeMissing'); return tab; }
+    // the availability settings are never bent: with no fitting offer there is no result
+    if (info.filtered.length) { tab.block = t('filterBlocks', { names: info.filtered.join(', ') }); return tab; }
     const long = state.long[kind] === tab.base;
     tab.res = requestCalc(kind, tab.base + (long ? '|long' : ''), products,
       { ...skroutzSettings(), budgetMs: long ? 45000 : 5000 });
     return tab;
   };
 
-  // a product tied to a BestPrice merchant needs the BestPrice prices first
-  const bpLock = state.cart.some((p) => p.lock && p.lock.src === 'bp');
-  if (!(bpLock && c.busy)) c.tabs.skroutz = want('skroutz');
+  c.tabs.skroutz = want('skroutz');
   if (c.bpOn && state.bpAccess !== false && !c.busy) {
-    c.usesBp = list.some((x) => x.bp.length > 0);
-    c.tabs.bestprice = want('bestprice');
     c.tabs.overall = want('overall');
   }
   return c;
@@ -799,13 +765,6 @@ function notReady(c, tab) {
   return null;
 }
 
-function notesFor(tab, sol) {
-  const notes = [];
-  if (tab.info.unfiltered.length) notes.push(t('filterIgnored', { n: count(tab.info.unfiltered.length, 'product') }));
-  if (sol.shipments.some((s) => s.feeEstimated)) notes.push(t('estShort'));
-  return notes;
-}
-
 /** "Best found, not proven cheapest" with a way to let the search run longer. */
 function stoppedNote(kind, tab, sol) {
   if (sol.exact) return null;
@@ -813,7 +772,7 @@ function stoppedNote(kind, tab, sol) {
     state.long[kind] !== tab.base && h('button', { class: 'link-btn', onclick: () => { state.long[kind] = tab.base; renderResults(); } }, t('searchLonger')));
 }
 
-// ---------- the four panels ----------
+// ---------- the three panels ----------
 function panelSingle(c, ctx) {
   const tab = c.tabs.skroutz;
   const wait = notReady(c, tab);
@@ -822,7 +781,7 @@ function panelSingle(c, ctx) {
   const single = tab.res.single[0];
   if (!single) return [notice(t('noSingle', { n }))];
   const others = tab.res.single.slice(1);
-  const mixed = tagSources(single, tab.info.other > 0);
+  tagSources(single, tab.info.other > 0);
   for (const o of others) tagSources(o, false);
   const hubStores = single.hub ? single.shipments[0].shops.length : 0;
   const best = single.total <= tab.res.overall.total + 0.004;
@@ -833,7 +792,6 @@ function panelSingle(c, ctx) {
     badge: n > 1 && (best
       ? h('span', { class: 'badge win' }, t('alsoCheapestSk'))
       : h('span', { class: 'badge warn' }, t('moreThanSplit', { amount: eur(single.total - tab.res.overall.total) }))),
-    note: [mixed.bp > 0 && t('skOther', { n: count(tab.info.other, 'product') }), ...notesFor(tab, single)].filter(Boolean).join(' '),
     extra: others.length > 0 && h('details', { class: 'others' },
       h('summary', {}, t('moreSingles', { n: others.length })),
       others.map((s) => h('div', { class: 'row' },
@@ -858,7 +816,6 @@ function panelSkroutz(c, ctx) {
     badge: single && (saving > 0.004
       ? h('span', { class: 'badge save' }, t('savesVsSingle', { amount: eur(saving) }))
       : h('span', { class: 'badge win' }, t('sameAsSingle'))),
-    note: [tab.info.other > 0 && t('skOther', { n: count(tab.info.other, 'product') }), ...notesFor(tab, overall)].filter(Boolean).join(' '),
     warn: stoppedNote('skroutz', tab, overall),
   }, ctx)];
 }
@@ -912,79 +869,55 @@ function matchRow(item) {
     body);
 }
 
-function panelBestPrice(c, ctx) {
+/**
+ * The cheapest way when BestPrice merchants may be used too, and whether that
+ * beats buying on Skroutz alone. null while it is not calculated.
+ */
+function mixState(c) {
+  const sol = tabTotal(c.tabs.overall, (r) => r.overall);
+  if (!sol) return null;
+  const from = tagSources(sol, true);
+  const sk = tabTotal(c.tabs.skroutz, (r) => r.overall);
+  const gain = sk ? sk.total - sol.total : null;
+  return { sol, from, gain, wins: from.bp > 0 && (gain == null || gain > 0.004) };
+}
+
+function panelMix(c, ctx) {
   if (state.bpAccess === false) return [accessNotice()];
   if (c.block) return [notice(c.block)];
   const n = c.recs.length;
-  const open = c.priced.length < n || state.bpEdit != null || state.bpPaste != null;
-  const matches = n > 0 && h('details', { class: 'matches', open },
+  // open the list of matches only when one of them needs the user
+  const needsPick = c.recs.some((r) => r.status === 'error' || (!r.rec.item && (r.rec.candidates || []).length > 0));
+  const matches = n > 0 && h('details', { class: 'matches', open: needsPick || state.bpEdit != null || state.bpPaste != null },
     h('summary', {}, t('matched')),
     c.real.map(matchRow));
   const shell = (title, note) => [h('article', { class: 'result' },
     h('div', { class: 'r-head' }, h('div', {},
-      h('div', { class: 'r-kicker' }, t('cheapestBp')),
+      h('div', { class: 'r-kicker' }, t('withBp')),
       h('div', { class: 'r-title' }, title))),
     note && h('div', { class: 'r-note' }, note),
     matches)];
 
-  const tab = c.tabs.bestprice;
+  const tab = c.tabs.overall;
   if (c.busy || !tab) return shell(dots(t('searchingBp')));
   if (tab.block) return shell(t('noTotal'), tab.block);
-  // nothing at all could be priced on BestPrice: a total would just repeat Skroutz
-  if (!c.usesBp) return shell(t('noTotal'), t('unmatchedNote', { n, total: count(n, 'product') }));
   if (!tab.res) return shell(dots(t('calculating')));
   if (tab.res.error) return shell(t('noTotal'), t('calcError', { msg: tab.res.error }));
 
-  const sol = tab.res.overall;
-  const from = tagSources(sol, tab.info.other > 0);
-  const merchants = sol.shipments.filter((s) => s.src === 'BestPrice').length;
-  const skTotal = tabTotal(c.tabs.skroutz, (r) => r.overall.total);
-  const diff = skTotal == null ? null : skTotal - sol.total;
-  const badge = diff == null ? null
-    : diff > 0.004 ? h('span', { class: 'badge save' }, t('cheaperThanSk', { amount: eur(diff) }))
-    : diff < -0.004 ? h('span', { class: 'badge warn' }, t('skCheaper', { amount: eur(-diff) }))
-    : h('span', { class: 'badge warn' }, t('sameAsSk'));
-  const notes = [t('ownSite')];
-  if (tab.info.other > 0) notes.push(t('bpOther', { n: count(tab.info.other, 'product') }));
-  notes.push(...notesFor(tab, sol));
+  const mix = mixState(c);
+  // nothing from BestPrice lowers the total: say so instead of repeating the Skroutz result
+  if (!mix.wins) {
+    return shell(t('noBpGain'), c.priced.length
+      ? t('noBpGainNote', { a: c.priced.length, b: count(n, 'product') })
+      : t('noBpFound'));
+  }
   return [resultCard({
-    kicker: t('cheapestBp'),
-    title: count(merchants, 'merchant') + (from.sk ? ` · ${t('nFromSk', { n: from.sk })}` : ''),
-    sol,
-    badge,
-    note: notes.join(' '),
-    warn: stoppedNote('bestprice', tab, sol),
+    kicker: t('withBp'),
+    title: mix.from.sk ? t('split', { sk: mix.from.sk, bp: mix.from.bp }) : t('allBp'),
+    sol: mix.sol,
+    badge: mix.gain != null && h('span', { class: 'badge save' }, t('savesVsSk', { amount: eur(mix.gain) })),
+    warn: stoppedNote('overall', tab, mix.sol),
     extra: matches,
-  }, ctx)];
-}
-
-function panelOverall(c, ctx) {
-  if (!c.block && state.bpAccess === false) return [accessNotice()];
-  const tab = c.tabs.overall;
-  const wait = notReady(c, tab);
-  if (wait) return wait;
-
-  const sol = tab.res.overall;
-  const from = tagSources(sol, true);
-  const n = c.recs.length;
-  // compare with buying everything on one site, where that is possible
-  const sk = c.tabs.skroutz && c.tabs.skroutz.info.other === 0 ? tabTotal(c.tabs.skroutz, (r) => r.overall.total) : null;
-  const bp = c.usesBp && c.tabs.bestprice && c.tabs.bestprice.info.other === 0 ? tabTotal(c.tabs.bestprice, (r) => r.overall.total) : null;
-  const alone = sk == null ? bp : bp == null ? sk : Math.min(sk, bp);
-  const aloneName = alone != null && alone === bp && bp !== sk ? 'BestPrice' : 'Skroutz';
-  const notes = [];
-  if (from.bp) notes.push(t('bpItemsOwnSite'));
-  if (c.priced.length < n) notes.push(t('noCertain', { n: n - c.priced.length, total: count(n, 'product') }));
-  notes.push(...notesFor(tab, sol));
-  return [resultCard({
-    kicker: t('cheapestOverall'),
-    title: !from.bp ? t('allSk') : !from.sk ? t('allBp') : t('split', { sk: from.sk, bp: from.bp }),
-    sol,
-    badge: alone == null ? null : alone - sol.total > 0.004
-      ? h('span', { class: 'badge save' }, t('savesVs', { amount: eur(alone - sol.total), site: aloneName }))
-      : h('span', { class: 'badge win' }, t('noMixGain')),
-    note: notes.join(' '),
-    warn: stoppedNote('overall', tab, sol),
   }, ctx)];
 }
 
@@ -995,15 +928,39 @@ function renderResults() {
 
   const c = compute();
   const sk = c.tabs.skroutz;
+  const ov = c.tabs.overall;
   const calcBusy = (tab) => !!c.wait || (!c.block && (!tab || (!tab.block && !tab.res)));
+  const noAccess = state.bpAccess === false;
+  const n = c.recs.length;
+  const mix = mixState(c);
+  // why a tab has no total (shown as a tooltip on its "—")
+  const blocked = (tab) => (typeof c.block === 'string' ? c.block : tab && typeof tab.block === 'string' ? tab.block : null);
   const tabs = [
-    { key: 'single', label: t('tabSingle'), total: tabTotal(sk, (r) => (r.single[0] ? r.single[0].total : null)), busy: calcBusy(sk) },
-    { key: 'skroutz', label: 'Skroutz', total: tabTotal(sk, (r) => r.overall.total), busy: calcBusy(sk) },
-    c.bpOn && { key: 'bestprice', label: 'BestPrice', total: c.usesBp ? tabTotal(c.tabs.bestprice, (r) => r.overall.total) : null,
-      busy: state.bpAccess !== false && (c.busy || (c.usesBp !== false && calcBusy(c.tabs.bestprice))) },
-    c.bpOn && { key: 'overall', label: t('tabOverall'), total: tabTotal(c.tabs.overall, (r) => r.overall.total),
-      busy: state.bpAccess !== false && (c.busy || calcBusy(c.tabs.overall)) },
+    { key: 'single', label: t('tabSingle'), sol: tabTotal(sk, (r) => r.single[0] || null), busy: calcBusy(sk),
+      why: blocked(sk) || t('whySingle') },
+    { key: 'skroutz', label: 'Skroutz', sol: tabTotal(sk, (r) => r.overall), busy: calcBusy(sk), why: blocked(sk) },
+    // a total only when buying something on BestPrice makes the order cheaper
+    c.bpOn && { key: 'overall', label: t('tabMix'), sol: mix && mix.wins ? mix.sol : null,
+      text: mix && !mix.wins ? t('noSaving') : null,
+      busy: !noAccess && (c.busy || calcBusy(ov)),
+      why: noAccess ? t('access1') : blocked(ov) },
   ].filter(Boolean);
+  for (const tab of tabs) {
+    tab.total = tab.sol ? tab.sol.total : null;
+    tab.tip = tab.total == null && !tab.busy ? (tab.text ? t('noBpGain') : tab.why || '') : '';
+  }
+
+  // what is still loading
+  const prog = [];
+  const got = c.real.filter((p) => state.offers[p.id]).length;
+  if (got < c.real.length) prog.push(t('progPrices', { a: got, b: c.real.length }));
+  if (c.bpOn && !noAccess && c.busy) {
+    const done = c.recs.filter((r) => r.status !== 'loading' && (r.rec.searched || r.rec.item || r.status === 'error')).length;
+    prog.push(t('progBp', { a: done, b: n }));
+  }
+  if (!prog.length && tabs.some((x) => x.busy)) prog.push(t('calculating') + '…');
+  $('progress').hidden = !prog.length;
+  $('progress').textContent = prog.join(' · ');
   // All tabs start closed; clicking a tab opens its details, clicking it again closes them.
   if (!tabs.some((x) => x.key === state.openTab)) state.openTab = null;
   const active = state.openTab;
@@ -1013,9 +970,10 @@ function renderResults() {
   $('tabs').replaceChildren(...tabs.map((tab) => h('button', {
     class: 'tab' + (min != null && tab.total != null && tab.total <= min + 0.004 ? ' cheapest' : ''),
     type: 'button', 'aria-expanded': String(tab.key === active), 'aria-controls': 'panel',
-    title: tab.key === active ? t('hideDetails') : t('showDetails'),
+    title: [tab.tip, tab.key === active ? t('hideDetails') : t('showDetails')].filter(Boolean).join('\n'),
     onclick: () => { state.openTab = state.openTab === tab.key ? null : tab.key; renderResults(); },
-  }, h('span', {}, tab.label), h('b', {}, tab.total != null ? eur(tab.total) : tab.busy ? '…' : '—'))));
+  }, h('span', {}, tab.label),
+  h('b', {}, tab.total != null ? eur(tab.total) : tab.text || (tab.busy ? '…' : '—')))));
 
   $('panel').hidden = !active;
   if (!active) { $('panel').replaceChildren(); return; }
@@ -1033,8 +991,7 @@ function renderResults() {
   };
   const panel = active === 'single' ? panelSingle(c, ctx)
     : active === 'skroutz' ? panelSkroutz(c, ctx)
-    : active === 'bestprice' ? panelBestPrice(c, ctx)
-    : panelOverall(c, ctx);
+    : panelMix(c, ctx);
   $('panel').replaceChildren(...panel);
 }
 
@@ -1071,6 +1028,12 @@ async function init() {
     });
   }
 
+  // first-run guide: shown until dismissed, and again from the settings
+  const showGuide = (on) => { $('welcome').hidden = !on; };
+  showGuide(!state.settings.welcomed);
+  $('welcome-ok').addEventListener('click', () => { state.settings.welcomed = true; saveSettings(); showGuide(false); });
+  $('guide-btn').addEventListener('click', () => { showGuide(true); $('settings').hidden = true; $('settings-btn').setAttribute('aria-expanded', 'false'); });
+
   $('settings-btn').addEventListener('click', () => {
     const open = $('settings').hidden;
     $('settings').hidden = !open;
@@ -1101,6 +1064,7 @@ async function init() {
   });
   $('refresh').addEventListener('click', () => loadAll(true));
   $('clear').addEventListener('click', emptyCart);
+  $('cart-toggle').addEventListener('click', () => { state.settings.cartHidden = !state.settings.cartHidden; saveSettings(); renderProducts(); });
   $('undo').addEventListener('click', undo);
 
   // The page button (content script) may change the list while the popup is open.

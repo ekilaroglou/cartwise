@@ -1,11 +1,11 @@
 {
   "extName": {
-    "message": "CartWise για Skroutz & BestPrice"
+    "message": "CartWise για Skroutz"
   },
   "extShortName": {
     "message": "CartWise"
   },
   "extDescription": {
-    "message": "Βρες τον φθηνότερο τρόπο να αγοράσεις όλη σου τη λίστα σε Skroutz και BestPrice: συγκρίνει όλα τα καταστήματα, το Skroutz Hub και τα μεταφορικά."
+    "message": "Βρες τον φθηνότερο τρόπο να αγοράσεις όλη τη λίστα σου στο Skroutz: συγκρίνει κάθε κατάστημα, το Skroutz Hub και τα μεταφορικά, και ελέγχει αν το BestPrice τη φθηναίνει."
   }
 }

@@ -17,3 +17,32 @@
 #sco-add-button.sco-added { background: #14804a; }
 #sco-add-button.sco-added:hover { background: #0f6a3c; }
 #sco-add-button[hidden] { display: none; }
+
+/* "Add to Skroutz cart" progress / result, on the Skroutz cart page */
+#sco-cart-box {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2147483000;
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 12px 40px 12px 16px;
+  border-radius: 12px;
+  background: #1c1d22;
+  color: #fff;
+  font: 14px/1.4 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .3);
+}
+#sco-cart-box strong { display: block; font-weight: 600; }
+#sco-cart-box div { margin-top: 4px; color: #d7d9e0; }
+#sco-cart-box button {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  border: 0;
+  background: none;
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}

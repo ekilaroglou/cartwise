@@ -90,6 +90,111 @@
     button.title = inCart ? text.removeTitle : text.addTitle;
   }
 
+  // ---------- "Add to Skroutz cart" (started from the popup) ----------
+  // The popup saves the chosen offers as `cartJob` and opens skroutz.gr/cart#cartwise.
+  // Here, on that page, each offer is added with the same request the site's own
+  // "add to cart" button makes, so it lands in the visitor's own cart.
+  const CART_TEXT = {
+    en: {
+      adding: (a, b) => `CartWise: adding to your cart… ${a} / ${b}`,
+      done: (n) => `CartWise added ${n} ${n === 1 ? 'product' : 'products'} to your cart.`,
+      failed: 'Could not be added (add them from their pages):',
+      fewer: (name, n) => `${name}: only ${n} available`,
+      close: 'Close',
+    },
+    el: {
+      adding: (a, b) => `CartWise: προσθήκη στο καλάθι σου… ${a} / ${b}`,
+      done: (n) => `Το CartWise πρόσθεσε ${n} ${n === 1 ? 'προϊόν' : 'προϊόντα'} στο καλάθι σου.`,
+      failed: 'Δεν προστέθηκαν (πρόσθεσέ τα από τη σελίδα τους):',
+      fewer: (name, n) => `${name}: διαθέσιμα μόνο ${n}`,
+      close: 'Κλείσιμο',
+    },
+  };
+  const RESULT_KEY = 'cartwise-cart-result';
+
+  function cartBox(lines, closable) {
+    let box = document.getElementById('sco-cart-box');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'sco-cart-box';
+      box.setAttribute('role', 'status');
+      document.body.appendChild(box);
+    }
+    box.replaceChildren(...lines.map((text, i) => {
+      const p = document.createElement(i ? 'div' : 'strong');
+      p.textContent = text;
+      return p;
+    }));
+    if (closable) {
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.textContent = '×';
+      x.setAttribute('aria-label', closable);
+      x.addEventListener('click', () => box.remove());
+      box.appendChild(x);
+    }
+    return box;
+  }
+
+  async function addToCart(item, token) {
+    const body = { product_id: +item.card, from: 'sku_product_cards' };
+    if (item.qty > 1) { body.with_qty_from_sku = true; body.quantity = item.qty; }
+    const res = await fetch(`/cart/add/${encodeURIComponent(item.sku)}.json`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/plain, */*', 'X-CSRF-Token': token, 'X-Requested-With': 'XMLHttpRequest' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error('status ' + res.status);
+    const data = await res.json();
+    const line = (data.line_items_info || []).map((x) => x.line_item).find((l) => l && String(l.product_id) === String(item.card));
+    if (!line) throw new Error('not in the cart');
+    return line.quantity;
+  }
+
+  async function runCartJob() {
+    if (BP || location.pathname !== '/cart' || !alive()) return;
+    const { text } = await read();
+    const T = CART_TEXT[text === TEXT.el ? 'el' : 'en'];
+
+    // after the reload that follows a finished job: say what happened
+    let last = null;
+    try { last = JSON.parse(sessionStorage.getItem(RESULT_KEY)); sessionStorage.removeItem(RESULT_KEY); } catch { /* no storage */ }
+    if (last) {
+      const lines = [T.done(last.ok), ...last.fewer.map((f) => T.fewer(f.name, f.n))];
+      if (last.failed.length) lines.push(T.failed, ...last.failed.map((n) => '• ' + n));
+      const box = cartBox(lines, T.close);
+      if (!last.failed.length && !last.fewer.length) setTimeout(() => box.remove(), 8000);
+      return;
+    }
+
+    if (location.hash !== '#cartwise') return;
+    // a "checking your browser" page has no token: wait for the real page
+    const token = document.querySelector('meta[name="csrf-token"]')?.content;
+    if (!token) return;
+    const { cartJob } = await chrome.storage.local.get('cartJob');
+    history.replaceState(null, '', location.pathname + location.search);
+    if (!cartJob || !Array.isArray(cartJob.items) || Date.now() - cartJob.ts > 120000) return;
+    await chrome.storage.local.remove('cartJob'); // claimed: never run twice
+
+    const result = { ok: 0, failed: [], fewer: [] };
+    const items = cartJob.items;
+    for (let i = 0; i < items.length; i++) {
+      cartBox([T.adding(i + 1, items.length)]);
+      try {
+        const got = await addToCart(items[i], token);
+        result.ok++;
+        if (got < items[i].qty) result.fewer.push({ name: items[i].name, n: got });
+      } catch (e) {
+        result.failed.push(items[i].name);
+        console.warn('CartWise:', items[i].name, e);
+      }
+    }
+    try { sessionStorage.setItem(RESULT_KEY, JSON.stringify(result)); } catch { /* no storage */ }
+    location.reload(); // show the cart with the new products
+  }
+  runCartJob().catch((e) => console.warn('CartWise:', e));
+
   // Both sites can change page without a full load, so keep an eye on the URL.
   const timer = setInterval(update, 1000);
   chrome.storage.onChanged.addListener((changes, area) => {

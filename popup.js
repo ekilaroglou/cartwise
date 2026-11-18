@@ -1,14 +1,11 @@
-import { parseShopsList, parseSkroutzSearch } from './lib/parser.js';
+import { parseSkroutzSearch } from './lib/parser.js';
+import { ORIGIN, PRODUCT_URL, BP_VER, OFFERS_VER, fetchShopsList as fetchOffers, getMeta } from './lib/skroutz.js';
 import { optimize } from './lib/optimizer.js';
 import { t, count, setLang, defaultLang, applyStatic } from './lib/i18n.js';
 import { findMatch, fetchOffers as fetchBpOffers, fetchItemMeta, titleCodes, parseItemLink, rank, evidence } from './lib/bestprice.js';
 
-const ORIGIN = 'https://www.skroutz.gr';
 const CACHE_TTL = 15 * 60 * 1000;
 const HISTORY_MAX = 30;
-const PRODUCT_URL = /^https?:\/\/(?:www\.)?skroutz\.gr\/s\/(\d+)(\/[^?#\s]*)?/i;
-const BP_VER = 4;     // BestPrice records: bump when their shape changes
-const OFFERS_VER = 2; // cached Skroutz price lists: bump when their shape changes
 
 const state = {
   // [{id, url, name, image, qty, mpn, brand}], or, for a product added from
@@ -28,6 +25,8 @@ const state = {
   phStatus: {},                               // placeholder id -> 'loading' | 'error'
   history: [],                                // earlier versions of the cart, newest last (for Undo)
   currentTab: null,                           // {kind: 'sk'|'bp', id, url} when the active tab is a product page
+  calcCache: {},                              // tab -> {key, result}: the last results, also for the next opening
+  open: {},                                   // <details> key -> open, as the user left it
 };
 
 const $ = (id) => document.getElementById(id);
@@ -54,7 +53,9 @@ const productUrl = (item) => (isPh(item) ? item.bpItem.url : item.url || `${ORIG
 
 // ---------- storage ----------
 async function load() {
-  const data = await chrome.storage.local.get(['cart', 'settings', 'offers', 'history', 'bp']);
+  const data = await chrome.storage.local.get(['cart', 'settings', 'offers', 'history', 'bp', 'calc']);
+  // results saved by this version (the calculation may differ in another)
+  state.calcCache = (data.calc && data.calc.ver === chrome.runtime.getManifest().version && data.calc.tabs) || {};
   state.bp = {};
   for (const [id, rec] of Object.entries(data.bp || {})) {
     if (!rec) continue;
@@ -73,6 +74,20 @@ async function load() {
   Object.assign(state.settings, data.settings || {});
   state.offers = {};
   for (const [id, o] of Object.entries(data.offers || {})) if (o && o.v === OFFERS_VER) state.offers[id] = o;
+  fixNames();
+}
+
+/** Products still called "Product <id>" (or without a picture) get them from what the background lookup read. */
+function fixNames() {
+  let changed = false;
+  for (const p of state.cart) {
+    const name = state.offers[p.id] && state.offers[p.id].name;
+    if (name && !isPh(p) && (!p.name || p.name.startsWith('Product '))) { p.name = name; changed = true; }
+    const image = state.offers[p.id] && state.offers[p.id].image;
+    if (image && !isPh(p) && !p.image) { p.image = image; changed = true; }
+  }
+  if (changed) chrome.storage.local.set({ cart: state.cart });
+  return changed;
 }
 const saveCart = () => chrome.storage.local.set({ cart: state.cart });
 /** Call right before changing the cart, so Undo can bring this version back. */
@@ -96,33 +111,7 @@ function saveBp() {
 }
 
 // ---------- Skroutz ----------
-async function fetchOffers(id) {
-  // credentials are omitted on purpose: we always read the public price list,
-  // and apply Skroutz Plus ourselves from the setting.
-  const res = await fetch(`${ORIGIN}/s/${id}/shops_list`, { credentials: 'omit', headers: { Accept: 'text/html' } });
-  if (!res.ok) throw new Error(res.status === 404 ? 'Product not found' : `Skroutz answered ${res.status}`);
-  return parseShopsList(new DOMParser().parseFromString(await res.text(), 'text/html'));
-}
-
-/** Name, picture, manufacturer part number and brand from a Skroutz product page. */
-async function getMeta(id, url) {
-  const res = await fetch(url || `${ORIGIN}/s/${id}/p.html`, { credentials: 'omit' });
-  if (!res.ok) return null;
-  const html = await res.text();
-  const meta = (prop) => {
-    const m = html.match(new RegExp(`<meta[^>]+property="og:${prop}"[^>]+content="([^"]*)"`, 'i'));
-    return m ? new DOMParser().parseFromString(m[1], 'text/html').documentElement.textContent : null;
-  };
-  const out = { name: meta('title'), image: meta('image'), mpn: '', brand: '', url: null };
-  try {
-    const ld = JSON.parse(html.match(/<script[^>]+id="product-schema"[^>]*>([\s\S]*?)<\/script>/i)[1]);
-    out.mpn = typeof ld.mpn === 'string' ? ld.mpn : '';
-    out.brand = (ld.brand && ld.brand.name) || '';
-  } catch { /* no structured data */ }
-  if (res.url && PRODUCT_URL.test(res.url)) out.url = res.url.split(/[?#]/)[0];
-  return out;
-}
-
+// fetchOffers and getMeta: lib/skroutz.js
 const metaJobs = new Map();
 /** Fill in a cart item's name, picture and part number (one request at a time per product). */
 function fetchMeta(item) {
@@ -491,10 +480,113 @@ function passes(o) {
   return true;
 }
 
+// ---------- drawing without blinking ----------
+/**
+ * Puts new content into a container only when it differs from what is shown,
+ * and keeps the pictures already on screen. Re-drawing identical content
+ * (prices read again, a status changing elsewhere) made the popup blink.
+ */
+const drawn = new WeakSet(); // containers whose content this script put there
+function update(box, ...content) {
+  const tmp = document.createElement('div');
+  for (const c of content.flat(Infinity)) if (c != null && c !== false) tmp.append(c.nodeType ? c : document.createTextNode(String(c)));
+  // What boot.js showed is only a copy: it looks the same but its buttons do
+  // nothing, so the first drawing always replaces it (with no visible change).
+  if (drawn.has(box) && tmp.innerHTML === box.innerHTML) return false;
+  drawn.add(box);
+  const shown = new Map();
+  for (const img of box.querySelectorAll('img')) {
+    const k = img.outerHTML;
+    if (!shown.has(k)) shown.set(k, []);
+    shown.get(k).push(img);
+  }
+  for (const img of tmp.querySelectorAll('img')) {
+    const same = shown.get(img.outerHTML);
+    if (same && same.length) img.replaceWith(same.shift());
+  }
+  box.replaceChildren(...tmp.childNodes);
+  return true;
+}
+
+/** A <details> whose open/closed state survives re-drawing; the user's choice wins over the default. */
+function fold(key, openByDefault, cls, summary, ...content) {
+  const open = state.open[key] ?? openByDefault;
+  return h('details', { class: cls, open },
+    h('summary', { onclick: (e) => { state.open[key] = !e.currentTarget.parentElement.open; } }, summary),
+    ...content);
+}
+
+/** The line under the title: what is loading, or the subtitle. */
+function status(text) {
+  const el = $('subtitle');
+  el.textContent = text || t('subtitle');
+  el.classList.toggle('busy', !!text);
+}
+
+/**
+ * Keeps a copy of the window as it looks now. boot.js shows it the next time
+ * the popup opens, before this script has read the saved data, so the popup
+ * opens at its final size instead of growing (the "flash").
+ */
+let snapTimer = null;
+function saveSnapshot() {
+  clearTimeout(snapTimer);
+  snapTimer = setTimeout(() => {
+    // only a settled view: nothing loading or being recalculated
+    if ($('subtitle').classList.contains('busy') || document.querySelector('#tabs .busy, #tabs .stale, #app .dots')) return;
+    const app = $('app').cloneNode(true);
+    const q = (s) => app.querySelector(s);
+    // as the popup opens: settings and result details closed
+    q('#settings').hidden = true;
+    q('#settings-btn').setAttribute('aria-expanded', 'false');
+    q('#refresh').classList.remove('spin');
+    q('#panel').hidden = true;
+    q('#panel').replaceChildren();
+    q('#add-msg').hidden = true;
+    q('#welcome').hidden = !!state.settings.welcomed; // the guide opens by itself only until it is dismissed
+    for (const b of app.querySelectorAll('#tabs .tab')) b.setAttribute('aria-expanded', 'false');
+    try {
+      localStorage.setItem('cartwise-snapshot', JSON.stringify({
+        v: chrome.runtime.getManifest().version, lang: document.documentElement.lang, html: app.innerHTML,
+      }));
+    } catch { /* storage full or blocked: the popup just opens without the copy */ }
+  }, 400);
+}
+
+/**
+ * Names as shown on one line. When two products start with the same long run
+ * of words (variants such as 0.9m / 1.8m), the shared part is cut after the
+ * first words, so what tells them apart stays visible: "Anker 322 … 0.9m A81H5G11".
+ * The full name is always in the tooltip.
+ */
+function shortNames(items) {
+  const words = items.map((p) => String(p.name || '').split(/\s+/).filter(Boolean));
+  const out = {};
+  items.forEach((p, i) => {
+    const w = words[i];
+    let common = 0;
+    words.forEach((o, j) => {
+      if (j === i) return;
+      let k = 0;
+      while (k < w.length && k < o.length && w[k].toLowerCase() === o[k].toLowerCase()) k++;
+      common = Math.max(common, k);
+    });
+    out[p.id] = common >= 5 && common < w.length ? [...w.slice(0, 2), '…', ...w.slice(common)].join(' ') : p.name;
+  });
+  return out;
+}
+let shortMemo = { key: null, map: {} };
+function shownName(item) {
+  const key = state.cart.map((p) => p.id + '\u0001' + p.name).join('\u0002');
+  if (shortMemo.key !== key) shortMemo = { key, map: shortNames(state.cart) };
+  return shortMemo.map[item.id] || item.name;
+}
+
 // ---------- rendering: products ----------
 function placeholderMeta(item) {
   const status = state.phStatus[item.id];
-  if (status === 'loading' || (!item.searched && status !== 'error')) return h('div', { class: 'p-meta dots' }, t('findingOnSk'));
+  // looked up before: keep showing that outcome while it is looked up again
+  if (!item.searched && status !== 'error') return h('div', { class: 'p-meta dots' }, t('findingOnSk'));
   if (status === 'error') {
     return h('div', { class: 'p-meta err' }, t('skSearchErr'),
       h('button', { class: 'retry', onclick: () => resolvePh(item.id) }, t('retry')));
@@ -529,12 +621,12 @@ function productMeta(item) {
 }
 
 function renderProducts() {
-  $('products').replaceChildren(...state.cart.map((item) => h('li', { class: 'product' },
+  update($('products'), state.cart.map((item) => h('li', { class: 'product' },
     item.image
-      ? h('img', { class: 'thumb-img', src: item.image, alt: '', loading: 'lazy' })
+      ? h('img', { class: 'thumb-img', src: item.image, alt: '' })
       : h('div', { class: 'thumb-img blank' }, '🛒'),
     h('div', { class: 'p-main' },
-      h('a', { class: 'p-name', href: productUrl(item), target: '_blank', rel: 'noreferrer', title: item.name }, item.name),
+      h('a', { class: 'p-name', href: productUrl(item), target: '_blank', rel: 'noreferrer', title: item.name }, shownName(item)),
       productMeta(item)),
     h('div', { class: 'p-side' },
       h('div', { class: 'qty' },
@@ -549,13 +641,14 @@ function renderProducts() {
   $('products').hidden = folded;
   $('undo').hidden = folded;
   $('clear').hidden = folded;
-  $('cart-toggle').hidden = state.cart.length === 0;
-  $('cart-toggle').textContent = t(folded ? 'show' : 'hide');
+  $('cart-toggle').disabled = state.cart.length === 0;
   $('cart-toggle').setAttribute('aria-expanded', String(!folded));
+  $('cart-toggle').title = state.cart.length ? t(folded ? 'showList' : 'hideList') : '';
+  saveSnapshot();
 }
 
 // ---------- rendering: result cards ----------
-/** ctx: {name(id), url(item, shipment)} */
+/** ctx: {name(id), image(id), url(item, shipment), mark?(item, shipment)} */
 function shipmentView(s, ctx, hideHead = false) {
   const title = s.hub
     ? [h('span', { class: 'badge hub' }, 'Skroutz Hub'), h('span', {}, s.shops.join(' + '))]
@@ -565,14 +658,17 @@ function shipmentView(s, ctx, hideHead = false) {
     : h('span', { class: 'v free' }, s.feeReason === 'plus' ? t('freePlus') : t('free'));
   return h('div', { class: 'shipment' },
     !hideHead && h('div', { class: 's-head' }, title),
+    // one line per product, each with its picture, so two products from the same shop read as two
     s.items.map((it) => {
       const name = ctx.name(it.productId) || it.name;
-      return h('div', { class: 'row' },
-        h('span', { class: 'n' },
-          // the link opens this shop's own offer
-          h('a', { href: ctx.url(it, s), target: '_blank', rel: 'noreferrer', title: name + (it.eta ? ` · ${it.eta}` : '') },
-            (it.qty > 1 ? `${it.qty} × ` : '') + name),
-          s.hub && s.shops.length > 1 && h('em', {}, ` · ${it.shopName}`)),
+      const pic = ctx.image(it.productId);
+      return h('div', { class: 'row item' },
+        pic ? h('img', { class: 'ti', src: pic, alt: '' }) : h('span', { class: 'ti blank', 'aria-hidden': 'true' }),
+        // the link opens this shop's own offer
+        h('a', { class: 'n', href: ctx.url(it, s), target: '_blank', rel: 'noreferrer', title: (ctx.fullName(it.productId) || name) + (it.eta ? ` · ${it.eta}` : '') },
+          (it.qty > 1 ? `${it.qty} × ` : '') + name),
+        s.hub && s.shops.length > 1 && h('span', { class: 'shop', title: it.shopName }, it.shopName),
+        ctx.mark && ctx.mark(it, s),
         it.stock === false && h('span', { class: 'badge warn avail', title: it.eta || '' },
           it.days != null ? t('etaDays', { n: it.days }) : t('notInStock')),
         h('span', { class: 'v' }, eur(it.price)));
@@ -593,11 +689,78 @@ function skroutzItems(sol) {
 /**
  * Hands the chosen offers to the page script, which puts them in the Skroutz
  * cart from a skroutz.gr tab (so it is the user's own cart, logged in or not).
+ * `empty`: also remove whatever else is in that cart.
  */
-async function sendToSkroutzCart(items) {
+async function sendToSkroutzCart(items, empty) {
   if (!items.length) return;
-  await chrome.storage.local.set({ cartJob: { ts: Date.now(), items } });
+  skCart = null; // that cart is about to change
+  await chrome.storage.local.set({ cartJob: { ts: Date.now(), items, empty: !!empty } });
   chrome.tabs.create({ url: `${ORIGIN}/cart#cartwise` });
+}
+
+/**
+ * The products in the user's Skroutz cart: [{sku, card}]. Read with their own
+ * cookies, only to tell them what else is in it; nothing is sent anywhere.
+ * Kept for a few seconds, so pointing at the button and pressing it read it once.
+ */
+let skCart = null;
+function readSkCart() {
+  if (skCart && Date.now() - skCart.ts < 10000) return skCart.promise;
+  const promise = fetch(`${ORIGIN}/cart/line_items.json`, { credentials: 'include', headers: { Accept: 'application/json' } })
+    .then((res) => (res.ok ? res.json() : Promise.reject(new Error('Skroutz answered ' + res.status))))
+    .then((data) => {
+      const lines = data && data.cart && data.cart.line_items;
+      if (!lines || typeof lines !== 'object') throw new Error('unexpected answer');
+      return Object.values(lines).map((l) => ({ sku: String(l.sku_id), card: String(l.product_id) }));
+    });
+  skCart = { ts: Date.now(), promise };
+  promise.catch(() => { if (skCart && skCart.promise === promise) skCart = null; }); // try again next time
+  return promise;
+}
+
+/** "Add to your Skroutz cart?" with the choice to empty the rest of that cart. */
+function confirmCart(items, sol) {
+  if (document.querySelector('dialog.confirm')) return; // already asking
+  const sk = sol.shipments.filter((s) => !s.key.startsWith('sbp'));
+  const onBp = sol.shipments.filter((s) => s.key.startsWith('sbp')).reduce((n, s) => n + s.items.length, 0);
+  const stores = new Set(sk.flatMap((s) => s.shops)).size;
+  const amount = sk.reduce((sum, s) => sum + s.subtotal + s.fee, 0);
+  const skus = new Set(items.map((i) => i.sku));
+
+  const empty = h('input', { type: 'checkbox' });
+  // one line whose text changes in place once the cart has been read
+  const hint = h('p', { class: 'c-hint' }, t('checkingSkCart'));
+  const ok = h('button', { class: 'btn primary', type: 'submit', value: 'ok' }, t('confirmAdd'));
+  empty.addEventListener('change', () => { ok.textContent = t(empty.checked ? 'confirmEmptyAdd' : 'confirmAdd'); });
+  const dlg = h('dialog', { class: 'confirm', 'aria-labelledby': 'c-title' },
+    h('form', { method: 'dialog' },
+      h('h3', { id: 'c-title' }, t('confirmTitle')),
+      h('p', {}, t('confirmWhat', { products: count(items.length, 'product'), stores: count(stores, 'store'), amount: eur(amount) })),
+      onBp > 0 && h('p', { class: 'c-note' }, t('confirmBpNote', { n: onBp })),
+      h('label', { class: 'c-check' }, empty, h('span', {}, t('emptyRest'))),
+      hint,
+      h('div', { class: 'c-actions' },
+        h('button', { class: 'btn', type: 'submit', value: 'cancel' }, t('cancel')),
+        ok)));
+  dlg.returnValue = '';
+  dlg.addEventListener('close', () => {
+    if (dlg.returnValue === 'ok') sendToSkroutzCart(items, empty.checked);
+    dlg.remove();
+  });
+  // a click on the dimmed page around it cancels
+  dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
+  document.body.append(dlg); // outside #app: not part of the saved copy of the window
+  dlg.showModal();
+  ok.focus();
+  readSkCart().then((lines) => {
+    if (!dlg.isConnected) return;
+    // a product of this order that is already there is updated, not counted as "other"
+    const others = lines.filter((l) => !skus.has(l.sku)).length;
+    // Seeing nothing else proves little: some browsers send this read without the
+    // Skroutz login, and get an empty guest cart. So the choice always stays, and
+    // the cart page (which has the login) does the emptying.
+    hint.textContent = others ? t('othersInSkCart', { n: others }) : t('emptyRestHint');
+  }, () => { if (dlg.isConnected) hint.textContent = t('emptyRestHint'); });
 }
 
 function cartButton(sol) {
@@ -605,11 +768,15 @@ function cartButton(sol) {
   if (!items.length) return null;
   const mixed = sol.shipments.some((s) => s.key.startsWith('sbp'));
   return h('div', { class: 'r-actions' },
-    h('button', { class: 'btn primary', type: 'button', onclick: () => sendToSkroutzCart(items) },
-      t(mixed ? 'addSkPartToCart' : 'addToSkCart')));
+    h('button', {
+      class: 'btn primary', type: 'button', onclick: () => confirmCart(items, sol),
+      // start reading the Skroutz cart as the pointer arrives, so the question is complete when it opens
+      onpointerenter: () => { readSkCart().catch(() => {}); },
+      onfocus: () => { readSkCart().catch(() => {}); },
+    }, t(mixed ? 'addSkPartToCart' : 'addToSkCart')));
 }
 
-function resultCard({ kicker, title, sol, badge, note, warn, extra }, ctx) {
+function resultCard({ kicker, title, sol, badge, note, warn, extra, noCart }, ctx) {
   return h('article', { class: 'result' },
     h('div', { class: 'r-head' },
       h('div', {},
@@ -623,7 +790,7 @@ function resultCard({ kicker, title, sol, badge, note, warn, extra }, ctx) {
     warn,
     // a lone store shipment would just repeat the card title
     sol.shipments.map((s) => shipmentView(s, ctx, sol.shipments.length === 1 && !s.hub && !s.showSrc && s.shops[0] === title)),
-    cartButton(sol),
+    !noCart && cartButton(sol),
     extra);
 }
 
@@ -638,56 +805,95 @@ const skroutzSettings = () => ({
   plusMin: state.settings.delivery === 'home' ? 25 : 15,
 });
 
-const calc = {}; // tab -> {key, result, products, settings}
+const TABS = ['skroutz', 'overall', 'bestprice'];
+const calc = {};          // tab -> {key, result, prev, products, settings}
+const inFlight = new Map(); // tab -> key sent to the worker and not answered yet
 let worker = null;
 let workerTimer = null;
 
-/** The result for these inputs if it is ready; otherwise starts the calculation and returns null. */
+/**
+ * The result for these inputs: {res, stale}. Until it is calculated, the
+ * previous result is returned as `stale` (it is shown dimmed if this takes a
+ * moment), so the totals never blink to "…" and back.
+ */
 function requestCalc(tab, key, products, settings) {
   const cur = calc[tab];
-  if (cur && cur.key === key) return cur.result;
-  calc[tab] = { key, result: null, products, settings };
+  if (cur && cur.key === key) return { res: cur.result || cur.prev, stale: !cur.result && !!cur.prev };
+  const saved = state.calcCache[tab];
+  if (saved && saved.key === key) {
+    calc[tab] = { key, result: saved.result };
+    return { res: saved.result, stale: false };
+  }
+  const prev = (cur && (cur.result || cur.prev)) || (saved && saved.result) || null;
+  calc[tab] = { key, result: null, prev, products, settings };
   if (!workerTimer) workerTimer = setTimeout(runWorker, 0);
-  return null;
+  return { res: prev, stale: !!prev };
 }
 
-/** Drops whatever is running (its inputs are out of date) and queues every unfinished tab. */
+/** A result is ready: keep it, also for the next time the popup opens. */
+function calcDone(tab, result) {
+  const j = calc[tab];
+  j.result = result;
+  j.prev = null;
+  if (!result.error) {
+    state.calcCache[tab] = { key: j.key, result };
+    chrome.storage.local.set({ calc: { ver: chrome.runtime.getManifest().version, tabs: state.calcCache } });
+  }
+}
+
 function runWorker() {
   workerTimer = null;
-  const todo = ['skroutz', 'overall'].filter((tab) => calc[tab] && !calc[tab].result);
+  const todo = TABS.filter((tab) => calc[tab] && !calc[tab].result && inFlight.get(tab) !== calc[tab].key);
   if (!todo.length) return;
   try {
-    if (worker) worker.terminate();
-    worker = new Worker(chrome.runtime.getURL('lib/worker.js'), { type: 'module' });
-    worker.onmessage = (e) => {
-      const { tab, key, result } = e.data;
-      if (calc[tab] && calc[tab].key === key) { calc[tab].result = result; renderResults(); }
-    };
-    worker.onerror = () => { worker = null; todo.forEach(calcHere); renderResults(); };
-    for (const tab of todo) {
+    // a worker still busy with inputs that have changed since is dropped
+    const outdated = [...inFlight].some(([tab, key]) => !calc[tab] || calc[tab].key !== key);
+    if (worker && outdated) { worker.terminate(); worker = null; inFlight.clear(); }
+    if (!worker) {
+      worker = new Worker(chrome.runtime.getURL('lib/worker.js'), { type: 'module' });
+      worker.onmessage = (e) => {
+        const { tab, key, result } = e.data;
+        if (inFlight.get(tab) === key) inFlight.delete(tab);
+        if (calc[tab] && calc[tab].key === key && !calc[tab].result) { calcDone(tab, result); renderResults(); }
+      };
+      worker.onerror = () => { worker = null; inFlight.clear(); TABS.forEach(calcHere); renderResults(); };
+    }
+    for (const tab of TABS) {
       const j = calc[tab];
+      if (!j || j.result || inFlight.get(tab) === j.key) continue;
+      inFlight.set(tab, j.key);
       worker.postMessage({ tab, key: j.key, products: j.products, settings: j.settings });
     }
   } catch {
-    todo.forEach(calcHere); // no worker available: calculate here
+    TABS.forEach(calcHere); // no worker available: calculate here
     renderResults();
   }
 }
 function calcHere(tab) {
   const j = calc[tab];
   if (!j || j.result) return;
-  try { j.result = optimize(j.products, j.settings); } catch (e) { j.result = { error: String(e.message || e) }; }
+  let result;
+  try { result = optimize(j.products, j.settings); } catch (e) { result = { error: String(e.message || e) }; }
+  calcDone(tab, result);
 }
 
 /** Products and offers for one tab. */
 function tabProducts(kind, list) {
   const products = [];
-  const info = { other: 0, filtered: [], missing: [] }; // filtered: products the availability settings leave without an offer
+  // other: products priced from the other site; filtered: products the availability settings leave without an offer
+  const info = { other: 0, filtered: [], missing: [] };
   for (const { item, sk, bp } of list) {
     let offers;
-    // Skroutz tab: a product Skroutz does not sell is priced from BestPrice
-    if (kind === 'skroutz') { offers = sk.length ? sk : bp; if (!sk.length && bp.length) info.other++; }
-    else offers = [...sk, ...bp];
+    if (kind === 'skroutz') {
+      // a product Skroutz does not sell is priced from BestPrice
+      offers = sk.length ? sk : bp;
+      if (!sk.length && bp.length) info.other++;
+    } else if (kind === 'bestprice') {
+      // buying on BestPrice: what it cannot supply (within the settings) comes from Skroutz
+      const fit = bp.filter(passes);
+      offers = fit.length ? fit : sk;
+      if (!fit.length && sk.length) info.other++;
+    } else offers = [...sk, ...bp];
     if (!offers.length) { info.missing.push(item.id); continue; }
     offers = offers.filter(passes);
     if (!offers.length) { info.filtered.push(item.name); continue; }
@@ -696,12 +902,36 @@ function tabProducts(kind, list) {
   return { products, info };
 }
 
+/**
+ * A short fingerprint of a list of offers. The calculations are keyed on it,
+ * so prices read again but unchanged do not start a new calculation.
+ */
+const prints = new WeakMap();
+// fields in a fixed order: saved data comes back with its fields reordered
+const sortedFields = (k, v) => (v && typeof v === 'object' && !Array.isArray(v)
+  ? Object.keys(v).sort().reduce((o, key) => { o[key] = v[key]; return o; }, {})
+  : v);
+function fingerprint(list) {
+  if (!list) return '-';
+  let v = prints.get(list);
+  if (v == null) {
+    // the sites list the same offers in a varying order
+    const s = list.map((o) => JSON.stringify(o, sortedFields)).sort().join('\n');
+    let x = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) { x ^= s.charCodeAt(i); x = Math.imul(x, 0x01000193); }
+    v = (x >>> 0).toString(36) + '.' + s.length.toString(36);
+    prints.set(list, v);
+  }
+  return v;
+}
+
 function compute() {
   const c = { bpOn: state.settings.bestprice !== false, real: state.cart.filter((p) => !isPh(p)), tabs: {} };
   const phs = state.cart.filter(isPh);
   const pending = c.real.filter((p) => !state.offers[p.id]);
 
-  if (phs.some((p) => state.phStatus[p.id] === 'loading' || (!p.searched && state.phStatus[p.id] !== 'error'))) {
+  // a product added from BestPrice blocks the results only until its first lookup
+  if (phs.some((p) => !p.searched && state.phStatus[p.id] !== 'error')) {
     c.wait = true;
     c.block = dots(t('findingSkProduct'));
   } else if (pending.length) {
@@ -710,34 +940,46 @@ function compute() {
   }
 
   c.recs = c.real.map((item) => ({ item, rec: state.bp[item.id] || {}, status: state.bpStatus[item.id] }));
+  // Waits only for products never looked up on BestPrice, or a match just chosen
+  // whose prices are not read yet. A product looked up before keeps its last
+  // outcome (prices, or no match) while it is looked up again.
   c.busy = c.bpOn && state.bpAccess !== false
-    && c.recs.some((r) => r.status === 'loading' || (!r.rec.searched && !r.rec.item && r.status !== 'error'));
+    && c.recs.some((r) => (!r.rec.searched && !r.rec.item && r.status !== 'error')
+      || (r.rec.item && !r.rec.offers && r.status === 'loading'));
   c.priced = c.recs.filter((r) => r.rec.item && r.rec.offers && r.rec.offers.length);
   if (c.block) return c;
 
   const list = state.cart.map((item) => ({ item, ...sources(item) }));
   const s = state.settings;
   const sig = [s.hasPlus ? 1 : 0, s.delivery, s.avail || 'any', +s.maxDays || 0, c.bpOn ? 1 : 0, state.bpAccess === false ? 0 : 1,
-    ...state.cart.map((p) => [p.id, p.qty || 1,
-      (state.offers[p.id] && state.offers[p.id].ts) || 0,
-      (state.bp[p.id] && state.bp[p.id].offersTs) || 0,
-      (state.bp[p.id] && state.bp[p.id].item && state.bp[p.id].item.id) || ''].join(':'))].join('|');
+    ...state.cart.map((p) => {
+      const rec = state.bp[p.id];
+      return [p.id, p.qty || 1,
+        fingerprint(state.offers[p.id] && state.offers[p.id].offers),
+        fingerprint(rec && rec.item && rec.offers),
+        (rec && rec.item && rec.item.id) || ''].join(':');
+    })].join('|');
 
   const want = (kind) => {
     const { products, info } = tabProducts(kind, list);
     const tab = { info, base: `${kind}|${sig}` };
-    if (info.missing.length) { tab.block = t('removeMissing'); return tab; }
+    if (info.missing.length) { tab.block = t('removeMissing'); tab.reason = 'missing'; return tab; }
     // the availability settings are never bent: with no fitting offer there is no result
-    if (info.filtered.length) { tab.block = t('filterBlocks', { names: info.filtered.join(', ') }); return tab; }
+    if (info.filtered.length) { tab.block = t('filterBlocks', { names: info.filtered.join(', ') }); tab.reason = 'filter'; return tab; }
     const long = state.long[kind] === tab.base;
-    tab.res = requestCalc(kind, tab.base + (long ? '|long' : ''), products,
+    const r = requestCalc(kind, tab.base + (long ? '|long' : ''), products,
       { ...skroutzSettings(), budgetMs: long ? 45000 : 5000 });
+    tab.res = r.res;
+    tab.stale = r.stale;
     return tab;
   };
 
   c.tabs.skroutz = want('skroutz');
   if (c.bpOn && state.bpAccess !== false && !c.busy) {
     c.tabs.overall = want('overall');
+    c.mix = mixState(c);
+    // no saving with BestPrice: work out what buying there would cost, to compare
+    if (c.mix && !c.mix.wins && c.priced.length) c.tabs.bestprice = want('bestprice');
   }
   return c;
 }
@@ -769,7 +1011,9 @@ function notReady(c, tab) {
 function stoppedNote(kind, tab, sol) {
   if (sol.exact) return null;
   return h('div', { class: 'r-note' }, t('bestFound'), ' ',
-    state.long[kind] !== tab.base && h('button', { class: 'link-btn', onclick: () => { state.long[kind] = tab.base; renderResults(); } }, t('searchLonger')));
+    state.long[kind] !== tab.base && h('button', {
+      class: 'link-btn', 'data-for': tab.base, onclick: () => { state.long[kind] = tab.base; renderResults(); },
+    }, t('searchLonger')));
 }
 
 // ---------- the three panels ----------
@@ -792,8 +1036,7 @@ function panelSingle(c, ctx) {
     badge: n > 1 && (best
       ? h('span', { class: 'badge win' }, t('alsoCheapestSk'))
       : h('span', { class: 'badge warn' }, t('moreThanSplit', { amount: eur(single.total - tab.res.overall.total) }))),
-    extra: others.length > 0 && h('details', { class: 'others' },
-      h('summary', {}, t('moreSingles', { n: others.length })),
+    extra: others.length > 0 && fold('others', false, 'others', t('moreSingles', { n: others.length }),
       others.map((s) => h('div', { class: 'row' },
         h('span', { class: 'n' }, s.hub && h('span', { class: 'badge hub' }, 'Skroutz Hub'), s.hub ? ' ' + s.shipments[0].shops.join(' + ') : s.label),
         h('span', { class: 'v' }, eur(s.total))))),
@@ -827,15 +1070,30 @@ function accessNotice() {
     h('p', { style: 'margin-top:6px' }, h('button', { class: 'btn small', onclick: grantBpAccess }, t('allow'))));
 }
 
+/** Why a product is bought from Skroutz in the BestPrice result, as a small badge. */
+function bpGap(id) {
+  const rec = state.bp[id] || {};
+  const [text, cls] = !rec.item
+    ? ((rec.candidates || []).length ? [t('notSure'), 'warn'] : [t('notFound'), 'bad'])
+    : rec.offers && !rec.offers.length ? [t('noMerchants'), 'bad'] : [t('noFitShort'), 'warn'];
+  return h('span', { class: `badge ${cls} avail` }, text);
+}
+
 function matchRow(item) {
   const rec = state.bp[item.id] || {};
-  const status = state.bpStatus[item.id];
+  // looked up before: keep showing that outcome while it is looked up again
+  const status = state.bpStatus[item.id] === 'loading' && rec.searched && !rec.item ? undefined : state.bpStatus[item.id];
   const cands = rec.candidates || [];
+  // the cheapest BestPrice price that fits the availability settings
+  const fits = (rec.item && rec.offers ? rec.offers : []).filter(passes);
+  const from = fits.length ? Math.min(...fits.map((o) => o.price)) : null;
   let tag = null;
-  if (status === 'loading') tag = h('span', { class: 'dots' }, t('searching'));
+  if (from != null) tag = h('span', { class: 'm-price' }, t('fromPrice2', { price: eur(from) }));
+  else if (status === 'loading') tag = h('span', { class: 'dots' }, t('searching'));
   else if (status === 'error') tag = h('span', { class: 'badge bad' }, t('couldNotLoad'));
   else if (!rec.item) tag = cands.length ? h('span', { class: 'badge warn' }, t('notSure')) : h('span', { class: 'badge bad' }, t('notFound'));
   else if (rec.offers && !rec.offers.length) tag = h('span', { class: 'badge bad' }, t('noMerchants'));
+  else if (rec.offers) tag = h('span', { class: 'badge warn' }, t('noFit'));
 
   let body = null;
   if (state.bpPaste === item.id) {
@@ -845,7 +1103,7 @@ function matchRow(item) {
     body = h('div', { class: 'm-pick' }, input,
       h('button', { class: 'btn small', onclick: submit }, t('use')),
       h('button', { class: 'btn small', onclick: () => { state.bpPaste = null; state.bpEdit = null; renderResults(); } }, t('cancel')));
-    setTimeout(() => input.focus());
+    setTimeout(() => { const live = document.querySelector('.m-pick input'); if (live && document.activeElement !== live) live.focus(); });
   } else if (status === 'error') {
     body = h('div', { class: 'm-pick' }, h('button', { class: 'btn small', onclick: () => loadBp(item.id, true) }, t('retry')));
   } else if (rec.item && state.bpEdit !== item.id) {
@@ -865,13 +1123,13 @@ function matchRow(item) {
         h('button', { class: 'btn small', onclick: () => { state.bpPaste = item.id; renderResults(); } }, t('pasteBtn')));
   }
   return h('div', { class: 'match' },
-    h('div', { class: 'm-src' }, h('span', { title: item.name }, item.name), tag),
+    h('div', { class: 'm-src' }, h('span', { title: item.name }, shownName(item)), tag),
     body);
 }
 
 /**
  * The cheapest way when BestPrice merchants may be used too, and whether that
- * beats buying on Skroutz alone. null while it is not calculated.
+ * beats buying on Skroutz only. null while it is not calculated.
  */
 function mixState(c) {
   const sol = tabTotal(c.tabs.overall, (r) => r.overall);
@@ -886,10 +1144,9 @@ function panelMix(c, ctx) {
   if (state.bpAccess === false) return [accessNotice()];
   if (c.block) return [notice(c.block)];
   const n = c.recs.length;
-  // open the list of matches only when one of them needs the user
+  // the list of matches opens by itself only when one of them needs the user
   const needsPick = c.recs.some((r) => r.status === 'error' || (!r.rec.item && (r.rec.candidates || []).length > 0));
-  const matches = n > 0 && h('details', { class: 'matches', open: needsPick || state.bpEdit != null || state.bpPaste != null },
-    h('summary', {}, t('matched')),
+  const matches = n > 0 && fold('matches', needsPick || state.bpEdit != null || state.bpPaste != null, 'matches', t('matched'),
     c.real.map(matchRow));
   const shell = (title, note) => [h('article', { class: 'result' },
     h('div', { class: 'r-head' }, h('div', {},
@@ -904,53 +1161,94 @@ function panelMix(c, ctx) {
   if (!tab.res) return shell(dots(t('calculating')));
   if (tab.res.error) return shell(t('noTotal'), t('calcError', { msg: tab.res.error }));
 
-  const mix = mixState(c);
-  // nothing from BestPrice lowers the total: say so instead of repeating the Skroutz result
-  if (!mix.wins) {
-    return shell(t('noBpGain'), c.priced.length
-      ? t('noBpGainNote', { a: c.priced.length, b: count(n, 'product') })
-      : t('noBpFound'));
+  const mix = c.mix;
+  if (mix.wins) {
+    return [resultCard({
+      kicker: t('withBp'),
+      title: mix.from.sk ? t('split', { sk: mix.from.sk, bp: mix.from.bp }) : t('allBp'),
+      sol: mix.sol,
+      badge: mix.gain != null && h('span', { class: 'badge save' }, t('savesVsSk', { amount: eur(mix.gain) })),
+      warn: stoppedNote('overall', tab, mix.sol),
+      extra: matches,
+    }, ctx)];
   }
+
+  // Nothing on BestPrice lowers the total: show what buying there would cost.
+  if (!c.priced.length) return shell(t('noBpGain'), t('noBpFound'));
+  const bt = c.tabs.bestprice;
+  if (!bt || (!bt.res && !bt.block)) return shell(t('noBpGain'), dots(t('calculating')));
+  if (bt.block) return shell(t('noBpGain'), bt.block);
+  if (bt.res.error) return shell(t('noBpGain'), t('calcError', { msg: bt.res.error }));
+  const sol = bt.res.overall;
+  const from = tagSources(sol, true);
+  const merchants = sol.shipments.filter((s) => s.src === 'BestPrice').length;
+  const skTotal = tabTotal(c.tabs.skroutz, (r) => r.overall.total);
+  const diff = skTotal == null ? null : sol.total - skTotal;
   return [resultCard({
-    kicker: t('withBp'),
-    title: mix.from.sk ? t('split', { sk: mix.from.sk, bp: mix.from.bp }) : t('allBp'),
-    sol: mix.sol,
-    badge: mix.gain != null && h('span', { class: 'badge save' }, t('savesVsSk', { amount: eur(mix.gain) })),
-    warn: stoppedNote('overall', tab, mix.sol),
+    kicker: t('cheapestBp'),
+    title: count(merchants, 'merchant') + (from.sk ? ` · ${t('nFromSk', { n: from.sk })}` : ''),
+    sol,
+    badge: diff == null ? null : diff > 0.004
+      ? h('span', { class: 'badge warn' }, t('skOnlyCheaper', { amount: eur(diff) }))
+      : h('span', { class: 'badge win' }, t('sameAsSkOnly')),
+    warn: stoppedNote('bestprice', bt, sol),
+    noCart: true, // more expensive than Skroutz only: nothing to buy from here
     extra: matches,
-  }, ctx)];
+  }, { ...ctx, mark: (it, s) => s.src === 'Skroutz' && bpGap(it.productId) })];
 }
 
 function renderResults() {
   const box = $('results');
   box.hidden = state.cart.length === 0;
-  if (box.hidden) return;
+  if (box.hidden) { status(''); saveSnapshot(); return; }
 
   const c = compute();
   const sk = c.tabs.skroutz;
   const ov = c.tabs.overall;
+  const bt = c.tabs.bestprice;
   const calcBusy = (tab) => !!c.wait || (!c.block && (!tab || (!tab.block && !tab.res)));
   const noAccess = state.bpAccess === false;
   const n = c.recs.length;
-  const mix = mixState(c);
-  // why a tab has no total (shown as a tooltip on its "—")
+  const mix = c.mix;
+  // why a tab has no total (its tooltip)
   const blocked = (tab) => (typeof c.block === 'string' ? c.block : tab && typeof tab.block === 'string' ? tab.block : null);
+
+  // With BestPrice: the saving if there is one, otherwise what buying on BestPrice would cost
+  let mixTab = null;
+  if (c.bpOn) {
+    mixTab = { key: 'overall', label: t('tabMix'), busy: !noAccess && (c.busy || calcBusy(ov)), stale: !!(ov && ov.stale),
+      why: noAccess ? t('access1') : blocked(ov) };
+    if (mix && mix.wins) mixTab.sol = mix.sol;
+    else if (mix && !c.priced.length) { mixTab.text = t('notOnBpShort'); mixTab.why = t('noBpFound'); }
+    else if (mix) {
+      mixTab.sol = tabTotal(bt, (r) => r.overall);
+      mixTab.busy = !mixTab.sol && calcBusy(bt);
+      mixTab.stale = mixTab.stale || !!(bt && bt.stale);
+      mixTab.why = blocked(bt) || mixTab.why;
+      mixTab.src = bt;
+      mixTab.totalTip = t('bpPlanTip');
+    }
+  }
   const tabs = [
-    { key: 'single', label: t('tabSingle'), sol: tabTotal(sk, (r) => r.single[0] || null), busy: calcBusy(sk),
+    { key: 'single', label: t('tabSingle'), sol: tabTotal(sk, (r) => r.single[0] || null), busy: calcBusy(sk), stale: !!(sk && sk.stale),
       why: blocked(sk) || t('whySingle') },
-    { key: 'skroutz', label: 'Skroutz', sol: tabTotal(sk, (r) => r.overall), busy: calcBusy(sk), why: blocked(sk) },
-    // a total only when buying something on BestPrice makes the order cheaper
-    c.bpOn && { key: 'overall', label: t('tabMix'), sol: mix && mix.wins ? mix.sol : null,
-      text: mix && !mix.wins ? t('noSaving') : null,
-      busy: !noAccess && (c.busy || calcBusy(ov)),
-      why: noAccess ? t('access1') : blocked(ov) },
+    { key: 'skroutz', label: t('tabSk'), sol: tabTotal(sk, (r) => r.overall), busy: calcBusy(sk), stale: !!(sk && sk.stale), why: blocked(sk) },
+    mixTab,
   ].filter(Boolean);
   for (const tab of tabs) {
     tab.total = tab.sol ? tab.sol.total : null;
-    tab.tip = tab.total == null && !tab.busy ? (tab.text ? t('noBpGain') : tab.why || '') : '';
+    if (tab.total != null) { tab.tip = tab.totalTip || ''; continue; }
+    if (tab.busy) continue;
+    tab.tip = tab.why || '';
+    if (tab.text) continue;
+    const src = tab.src || (tab.key === 'overall' ? ov : sk);
+    tab.text = tab.key === 'overall' && noAccess ? t('noAccessShort')
+      : (src && src.reason === 'filter') ? t('checkSettings')
+      : tab.key === 'single' && !c.block && !(src && src.block) ? t('notPossible')
+      : t('unavailable');
   }
 
-  // what is still loading
+  // what is still loading, in the line under the title (so nothing moves)
   const prog = [];
   const got = c.real.filter((p) => state.offers[p.id]).length;
   if (got < c.real.length) prog.push(t('progPrices', { a: got, b: c.real.length }));
@@ -959,27 +1257,32 @@ function renderResults() {
     prog.push(t('progBp', { a: done, b: n }));
   }
   if (!prog.length && tabs.some((x) => x.busy)) prog.push(t('calculating') + '…');
-  $('progress').hidden = !prog.length;
-  $('progress').textContent = prog.join(' · ');
+  status(prog.join(' · '));
+
   // All tabs start closed; clicking a tab opens its details, clicking it again closes them.
   if (!tabs.some((x) => x.key === state.openTab)) state.openTab = null;
   const active = state.openTab;
   const totals = tabs.map((x) => x.total).filter((x) => x != null);
   const min = totals.length > 1 ? Math.min(...totals) : null;
 
-  $('tabs').replaceChildren(...tabs.map((tab) => h('button', {
+  update($('tabs'), tabs.map((tab) => h('button', {
     class: 'tab' + (min != null && tab.total != null && tab.total <= min + 0.004 ? ' cheapest' : ''),
     type: 'button', 'aria-expanded': String(tab.key === active), 'aria-controls': 'panel',
     title: [tab.tip, tab.key === active ? t('hideDetails') : t('showDetails')].filter(Boolean).join('\n'),
     onclick: () => { state.openTab = state.openTab === tab.key ? null : tab.key; renderResults(); },
   }, h('span', {}, tab.label),
-  h('b', {}, tab.total != null ? eur(tab.total) : tab.text || (tab.busy ? '…' : '—')))));
+  tab.total != null ? h('b', { class: tab.stale ? 'stale' : null }, eur(tab.total))
+    : tab.busy ? h('b', { class: 'busy' }, '…')
+    : h('b', { class: 'note' }, tab.text))));
 
-  $('panel').hidden = !active;
-  if (!active) { $('panel').replaceChildren(); return; }
+  const panel = $('panel');
+  panel.hidden = !active;
+  if (!active) { update(panel); saveSnapshot(); return; }
   const byId = Object.fromEntries(state.cart.map((p) => [p.id, p]));
   const ctx = {
-    name: (id) => byId[id] && byId[id].name,
+    name: (id) => byId[id] && shownName(byId[id]),
+    fullName: (id) => byId[id] && byId[id].name,
+    image: (id) => (byId[id] && byId[id].image) || null,
     // straight to the chosen shop's offer: the merchant's page via BestPrice,
     // or the Skroutz product page with that shop's listing selected
     url: (it, s) => {
@@ -989,18 +1292,23 @@ function renderResults() {
       return it.cardId ? `${base}${base.includes('?') ? '&' : '?'}product_id=${it.cardId}` : base;
     },
   };
-  const panel = active === 'single' ? panelSingle(c, ctx)
+  panel.classList.toggle('stale', !!(tabs.find((x) => x.key === active) || {}).stale);
+  update(panel, active === 'single' ? panelSingle(c, ctx)
     : active === 'skroutz' ? panelSkroutz(c, ctx)
-    : panelMix(c, ctx);
-  $('panel').replaceChildren(...panel);
+    : panelMix(c, ctx));
+  saveSnapshot();
 }
 
 function renderAddCurrent() {
+  // always the same size, so the popup does not jump when it opens on another page
   const btn = $('add-current');
   const tab = state.currentTab;
-  btn.hidden = !tab;
-  $('add-hint').hidden = !!tab || state.cart.length > 0;
-  if (!tab) return;
+  btn.classList.toggle('idle', !tab);
+  if (!tab) {
+    btn.disabled = true;
+    btn.textContent = t('openProduct');
+    return;
+  }
   const inCart = tab.kind === 'bp' ? bpInCart(tab.id) : state.cart.some((p) => p.id === tab.id);
   btn.disabled = inCart;
   btn.textContent = inCart ? t('inList') : t('addCurrent');
@@ -1014,7 +1322,9 @@ function render() {
 
 // ---------- wiring ----------
 async function init() {
-  await load();
+  // everything the first drawing needs, read at the same time
+  const tabQuery = chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+  await Promise.all([load(), checkBpAccess()]);
   setLang(state.settings.lang || defaultLang());
   applyStatic(document);
   for (const r of document.querySelectorAll('input[name="lang"]')) {
@@ -1029,8 +1339,8 @@ async function init() {
   }
 
   // first-run guide: shown until dismissed, and again from the settings
-  const showGuide = (on) => { $('welcome').hidden = !on; };
-  showGuide(!state.settings.welcomed);
+  const showGuide = (on) => { $('welcome').hidden = !on; saveSnapshot(); };
+  $('welcome').hidden = !!state.settings.welcomed;
   $('welcome-ok').addEventListener('click', () => { state.settings.welcomed = true; saveSettings(); showGuide(false); });
   $('guide-btn').addEventListener('click', () => { showGuide(true); $('settings').hidden = true; $('settings-btn').setAttribute('aria-expanded', 'false'); });
 
@@ -1067,10 +1377,19 @@ async function init() {
   $('cart-toggle').addEventListener('click', () => { state.settings.cartHidden = !state.settings.cartHidden; saveSettings(); renderProducts(); });
   $('undo').addEventListener('click', undo);
 
-  // The page button (content script) may change the list while the popup is open.
+  // The page button (content script) and the background lookup may change the data while the popup is open.
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
     if (changes.history) { state.history = changes.history.newValue || []; $('undo').disabled = !state.history.length; }
+    let fresh = false;
+    for (const [id, o] of Object.entries((changes.offers && changes.offers.newValue) || {})) {
+      if (o && o.v === OFFERS_VER && !(state.offers[id] && state.offers[id].ts >= o.ts)) { state.offers[id] = o; delete state.status[id]; fresh = true; }
+    }
+    for (const [id, r] of Object.entries((changes.bp && changes.bp.newValue) || {})) {
+      const cur = state.bp[id];
+      if (r && r.v === BP_VER && state.bpStatus[id] !== 'loading' && !(cur && (cur.manual || (cur.offersTs || 0) >= (r.offersTs || 0)))) { state.bp[id] = r; fresh = true; }
+    }
+    if (fresh && !changes.cart) { if (fixNames()) renderProducts(); renderResults(); }
     if (!changes.cart) return;
     const next = changes.cart.newValue || [];
     if (JSON.stringify(next) === JSON.stringify(state.cart)) return;
@@ -1080,7 +1399,7 @@ async function init() {
   });
 
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const [tab] = await tabQuery;
     const url = (tab && tab.url) || '';
     const sk = url.match(PRODUCT_URL);
     const bp = parseItemLink(url);
@@ -1088,7 +1407,6 @@ async function init() {
     else if (bp) state.currentTab = { kind: 'bp', id: bp.id, url: bp.url };
   } catch { /* no tab access */ }
 
-  await checkBpAccess();
   render();
   loadAll();
 }

@@ -5,10 +5,15 @@ A Chrome / Edge extension that finds the cheapest way to buy a list of skroutz.g
 For the products in your list it reads the price of every store (including offers shipped from Skroutz Hub) and shows three results as tabs, each with its total:
 
 1. **Single delivery** – the cheapest way to get everything in one shipment: from one store, or from Skroutz Hub (which can combine several stores).
-2. **Skroutz** – the cheapest combination across any number of Skroutz stores, shipping included.
-3. **With BestPrice** – shows a total only when buying one or more products at a BestPrice.gr merchant makes the order cheaper than Skroutz alone; otherwise it says that no BestPrice offer lowers the total.
+2. **Skroutz only** – the cheapest combination across any number of Skroutz stores, shipping included.
+3. **With BestPrice** – the cheapest way when BestPrice.gr merchants may be used too, and how much it saves over Skroutz only. When no BestPrice offer lowers the total, it shows instead what buying on BestPrice would cost (products BestPrice does not have are taken from Skroutz and marked "not found" or "not sure"), so you can see that Skroutz only is cheaper.
 
-**Add to Skroutz cart** under a result opens your Skroutz cart and adds that result's Skroutz offers to it (from the chosen stores, in the chosen quantities). Products that the result takes from BestPrice are bought through their links.
+**Add to Skroutz cart** under a result asks first: it shows how many products from how many stores, and how many other products your Skroutz cart already holds, with the choice to **empty the rest of the cart**. On confirming, it opens your Skroutz cart and puts that result's Skroutz offers in it (from the chosen stores, in the chosen quantities), then shows what it did. Products that the result takes from BestPrice are bought through their links.
+
+- The Skroutz cart holds one line per product. A product already in it is moved to the chosen store and set to the chosen quantity, so pressing the button twice does not double anything.
+- A quantity is never set above what the store has; the note on the cart page says "only N available" instead.
+- With **empty the rest** ticked, every other product is removed, including ones that this result buys on BestPrice. The note lists what was removed.
+- A product you had unticked in the Skroutz cart is ticked again, so it is part of the checkout.
 
 ## Install
 
@@ -20,12 +25,16 @@ For the products in your list it reads the price of every store (including offer
 
 - Open a product page on skroutz.gr or bestprice.gr, open the popup and press **Add this page's product**.
   Both sites also get a floating **+ Add to CartWise** button at the bottom left of product pages.
+- A product added with the page button is priced and looked up on BestPrice right away in the background, so the totals are ready when you open the popup.
 - A product added from BestPrice is looked up on Skroutz; if the extension is not sure which Skroutz product it is, it asks you to choose.
 - The sliders button opens the settings: **I have Skroutz Plus**, **Compare with BestPrice**, **Skroutz Point / Home** delivery and **Language** (English / Ελληνικά; the default follows the browser).
 - **Availability** and **Delivery within** (settings) leave out offers that are not in stock, not immediately available, or too slow. Result lines show a note such as "in ~12 days" when the chosen offer is not in stock.
 - Product names in the results link straight to the chosen shop's offer.
 - A product that Skroutz does not sell is priced from BestPrice, and its line is marked BestPrice.
-- **Hide** / **Show** next to the product count folds the product list away to save space.
+- Clicking **Products** folds the product list away (and back) to save space.
+- Every product takes one line. When two products start with the same words (e.g. two lengths of the same cable), the shared part is cut so the difference shows: "Anker 322 … 0.9m A81H5G11". The full name is in the tooltip.
+- **Matched products** (With BestPrice tab) lists each product's cheapest BestPrice price, or "not found".
+- The popup opens as it looked last time and keeps the totals on screen while prices are read again, so it does not flicker.
 - **Undo** takes back the last change to the list (add, remove, quantity, empty); **Empty cart** removes everything.
 - The round arrow re-reads prices (they are cached for 15 minutes).
 
@@ -54,4 +63,6 @@ These are the rules Skroutz shows on its product pages and help centre; the fina
 - `lib/parser.js` – turns Skroutz's store list (`/s/<id>/shops_list`) into offers.
 - `lib/optimizer.js` – the search for the cheapest single delivery and the cheapest overall split. `lib/worker.js` runs it in the background.
 - `lib/i18n.js` – English and Greek text. `_locales/` – the extension name and description for the browser.
-- `popup.*` – the popup. `content.*` – the button on product pages, and the step that adds the chosen offers to the Skroutz cart.
+- `background.js`, `offscreen.*` – the background lookup for products added with the page button (`lib/skroutz.js` reads Skroutz pages for it and for the popup).
+- `popup.*` – the popup. `content.*` – the button on product pages, and the step that puts the chosen offers in the Skroutz cart.
+- `pack.ps1` – makes `dist/cartwise-<version>.zip`, the file to upload to the Chrome Web Store and Edge Add-ons. `store/` – store logos and what to fill in when publishing (`store/STORE.md`).

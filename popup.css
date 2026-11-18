@@ -126,8 +126,7 @@ h2 { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap:
 .qty span { min-width: 18px; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; }
 .remove { width: 24px; height: 24px; border: 0; border-radius: 50%; background: none; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; }
 .remove:hover { background: var(--bg); color: var(--bad); }
-.dots::after { content: "…"; animation: blink 1s steps(2) infinite; }
-@keyframes blink { 50% { opacity: .2; } }
+.dots::after { content: "…"; }
 
 .empty { text-align: center; color: var(--muted); padding: 18px 16px; background: var(--card); border: 1px dashed var(--line); border-radius: var(--radius); }
 .empty p + p { margin-top: 4px; }
@@ -153,8 +152,8 @@ h2 { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap:
 .s-head { display: flex; align-items: center; gap: 6px; font-weight: 700; margin-bottom: 4px; flex-wrap: wrap; }
 .row { display: flex; justify-content: space-between; gap: 10px; padding: 1px 0; }
 .row .n { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row .n a { color: inherit; text-decoration: none; }
-.row .n a:hover { color: var(--accent-strong); }
+a.n { color: inherit; text-decoration: none; }
+a.n:hover { color: var(--accent-strong); }
 .row .n em { color: var(--muted); font-style: normal; }
 .row .v { flex: none; font-variant-numeric: tabular-nums; }
 .row.ship { color: var(--muted); }
@@ -231,9 +230,6 @@ h2 { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap:
 /* long lists: the product list scrolls, so the totals stay in view */
 .products { max-height: 232px; overflow-y: auto; scrollbar-width: thin; padding-right: 1px; }
 
-/* names: up to two lines, so variants of the same product can be told apart */
-.p-name { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.3; }
-.row .n { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 
 /* first-run guide */
 .welcome { padding: 12px 14px; background: var(--card); border: 1px solid var(--accent); border-radius: var(--radius); }
@@ -257,3 +253,59 @@ select option, select optgroup { background: var(--card); color: var(--text); }
 .r-actions { border-top: 1px solid var(--line); padding: 10px 12px; }
 .r-actions .btn.primary { white-space: normal; }
 .tab b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+
+/* product list as a drop-down */
+.fold { display: flex; align-items: center; gap: 6px; padding: 2px 4px 2px 0; border: 0; background: none; font: inherit; font-weight: 700; cursor: pointer; border-radius: 6px; }
+.fold:hover:not(:disabled) { color: var(--accent-strong); }
+.fold:disabled { cursor: default; }
+.fold:disabled .chev { display: none; }
+.fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chev { flex: none; color: var(--muted); transition: transform .15s; }
+.fold[aria-expanded="false"] .chev { transform: rotate(-90deg); }
+
+/* a tab without a total: a few words, not a big dash */
+.tab b.note { font-size: 12px; font-weight: 600; color: var(--muted); white-space: normal; line-height: 1.25; text-align: center; }
+
+/* BestPrice price per product */
+.m-head { color: var(--muted); font-size: 12px; font-weight: 700; margin-bottom: 2px; }
+.m-src span:first-child { flex: 1; }
+.m-price { flex: none; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+
+/* one line per product, with its picture */
+.p-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .n { flex: 1 1 auto; display: block; }
+.row.item { align-items: center; gap: 8px; padding: 4px 0; }
+.row.item + .row.item { border-top: 1px dashed var(--line); }
+.ti { flex: none; width: 24px; height: 24px; border-radius: 5px; object-fit: contain; background: #fff; border: 1px solid var(--line); }
+.ti.blank { background: var(--bg); }
+.row .shop { flex: 0 0 auto; max-width: 30%; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.shipment .row.ship { padding-left: 32px; }
+
+/* nothing moves while loading: fixed line heights, progress in the subtitle */
+.top p { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tab b { line-height: 19px; }
+.tab b.note { white-space: nowrap; line-height: 19px; }
+
+/* a result being recalculated keeps showing, dimmed only if it takes a moment */
+.tab b.stale, #panel.stale { opacity: .45; transition: opacity .2s .3s; }
+
+/* the add button keeps its place when there is nothing to add */
+.btn.primary.idle:disabled { background: transparent; border: 1px dashed var(--line); color: var(--muted); opacity: 1; font-weight: 600; }
+
+/* "Add to your Skroutz cart?" */
+dialog.confirm {
+  width: calc(100% - 40px); max-width: 380px; padding: 0;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--card); color: var(--text); box-shadow: 0 12px 32px rgba(0, 0, 0, .28);
+}
+dialog.confirm::backdrop { background: rgba(0, 0, 0, .35); }
+dialog.confirm form { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px 12px; }
+dialog.confirm h3 { font-size: 15px; font-weight: 700; }
+.c-note { color: var(--muted); font-size: 12px; }
+.c-check { display: flex; align-items: flex-start; gap: 8px; margin-top: 4px; font-weight: 600; cursor: pointer; }
+.c-check input { flex: none; width: 15px; height: 15px; margin: 2px 0 0; accent-color: var(--accent); cursor: pointer; }
+.c-check input:disabled, .c-check input:disabled + span { color: var(--muted); cursor: default; }
+/* one line, so its text can change without moving the buttons */
+.c-hint { margin: -6px 0 0 23px; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.c-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+.c-actions .btn.primary { width: auto; }

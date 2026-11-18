@@ -4,8 +4,12 @@
   const PRODUCT_PATH = BP ? /^\/item\/(\d+)\// : /^\/s\/(\d+)\//;
   let button = null;
   let lastKey = '';
+  let timer = null;
+  let waits = 0; // looks while a product page is still behind "checking your browser"
 
-  const currentId = () => (location.pathname.match(PRODUCT_PATH) || [])[1] || null;
+  // A "checking your browser" page has the product's address but not the product:
+  // wait for the real page (it has a title for sharing) before offering the button.
+  const currentId = () => (document.querySelector('meta[property="og:title"]') ? (location.pathname.match(PRODUCT_PATH) || [])[1] || null : null);
   const og = (prop) => document.querySelector(`meta[property="og:${prop}"]`)?.content || null;
   const alive = () => !!(chrome.runtime && chrome.runtime.id); // false after the extension is reloaded
   // Same language as the popup (settings.lang), else the browser's.
@@ -70,8 +74,11 @@
     if (!id) {
       if (button) button.hidden = true;
       lastKey = '';
+      // a product address without the product yet: look again for a short while
+      if (PRODUCT_PATH.test(location.pathname) && waits < 15) { waits++; setTimeout(update, 2000); }
       return;
     }
+    waits = 0;
     const { cart, bp, text, lang } = await read();
     const inCart = indexIn(cart, bp, id) >= 0;
     const key = `${id}:${inCart}:${cart.length}:${lang}`;
@@ -91,22 +98,44 @@
   }
 
   // ---------- "Add to Skroutz cart" (started from the popup) ----------
-  // The popup saves the chosen offers as `cartJob` and opens skroutz.gr/cart#cartwise.
-  // Here, on that page, each offer is added with the same request the site's own
-  // "add to cart" button makes, so it lands in the visitor's own cart.
+  // The popup saves the chosen offers as `cartJob` ({items, empty}) and opens
+  // skroutz.gr/cart#cartwise. Here, on that page, the cart is changed with the
+  // same requests the site's own buttons make, so it is the visitor's own cart.
+  // The Skroutz cart holds one line per product: adding a product that is
+  // already there from another shop moves that line to the new shop.
   const CART_TEXT = {
     en: {
       adding: (a, b) => `CartWise: adding to your cart… ${a} / ${b}`,
+      emptying: (a, b) => `CartWise: removing the other products… ${a} / ${b}`,
       done: (n) => `CartWise added ${n} ${n === 1 ? 'product' : 'products'} to your cart.`,
+      removed: (n) => `Removed ${n} other ${n === 1 ? 'product' : 'products'}:`,
+      more: (n) => `• and ${n} more`,
+      notRemoved: (n) => `${n} other ${n === 1 ? 'product' : 'products'} could not be removed.`,
+      emptyFailed: 'The rest of your cart could not be emptied.',
+      nothingElse: 'There was nothing else in your cart to remove.',
+      emptyingAll: 'CartWise: emptying your cart…',
+      emptied: 'Your cart was emptied first.',
       failed: 'Could not be added (add them from their pages):',
       fewer: (name, n) => `${name}: only ${n} available`,
+      inCart: (name, n) => `${name}: ${n} in your cart`,
+      otherShop: (name) => `${name}: in your cart from another shop`,
       close: 'Close',
     },
     el: {
       adding: (a, b) => `CartWise: προσθήκη στο καλάθι σου… ${a} / ${b}`,
+      emptying: (a, b) => `CartWise: αφαίρεση των άλλων προϊόντων… ${a} / ${b}`,
       done: (n) => `Το CartWise πρόσθεσε ${n} ${n === 1 ? 'προϊόν' : 'προϊόντα'} στο καλάθι σου.`,
+      removed: (n) => (n === 1 ? 'Αφαιρέθηκε 1 άλλο προϊόν:' : `Αφαιρέθηκαν ${n} άλλα προϊόντα:`),
+      more: (n) => `• και ${n} ακόμη`,
+      notRemoved: (n) => (n === 1 ? '1 άλλο προϊόν δεν αφαιρέθηκε.' : `${n} άλλα προϊόντα δεν αφαιρέθηκαν.`),
+      emptyFailed: 'Το υπόλοιπο καλάθι σου δεν άδειασε.',
+      nothingElse: 'Δεν υπήρχε τίποτε άλλο στο καλάθι σου για αφαίρεση.',
+      emptyingAll: 'CartWise: άδειασμα του καλαθιού σου…',
+      emptied: 'Το καλάθι σου άδειασε πρώτα.',
       failed: 'Δεν προστέθηκαν (πρόσθεσέ τα από τη σελίδα τους):',
       fewer: (name, n) => `${name}: διαθέσιμα μόνο ${n}`,
+      inCart: (name, n) => `${name}: ${n} στο καλάθι σου`,
+      otherShop: (name) => `${name}: στο καλάθι σου από άλλο κατάστημα`,
       close: 'Κλείσιμο',
     },
   };
@@ -136,20 +165,74 @@
     return box;
   }
 
-  async function addToCart(item, token) {
-    const body = { product_id: +item.card, from: 'sku_product_cards' };
-    if (item.qty > 1) { body.with_qty_from_sku = true; body.quantity = item.qty; }
-    const res = await fetch(`/cart/add/${encodeURIComponent(item.sku)}.json`, {
-      method: 'POST',
+  /** A request to the cart, as the site's own scripts make it. */
+  const cartApi = (token) => async (url, body, method = 'POST') => {
+    const res = await fetch(url, {
+      method,
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/plain, */*', 'X-CSRF-Token': token, 'X-Requested-With': 'XMLHttpRequest' },
-      body: JSON.stringify(body),
+      body: body == null ? undefined : JSON.stringify(body),
     });
-    if (!res.ok) throw new Error('status ' + res.status);
-    const data = await res.json();
-    const line = (data.line_items_info || []).map((x) => x.line_item).find((l) => l && String(l.product_id) === String(item.card));
-    if (!line) throw new Error('not in the cart');
-    return line.quantity;
+    if (!res.ok) throw new Error(`${url}: status ${res.status}`);
+    return res.json().catch(() => ({}));
+  };
+
+  /** The cart's lines, one per product: [{id, sku, card, pid, qty, max, selected}]. */
+  async function cartLines(call) {
+    const data = await call('/cart/line_items.json', null, 'GET');
+    const lines = data && data.cart && data.cart.line_items;
+    if (!lines || typeof lines !== 'object') throw new Error('unexpected cart');
+    return Object.entries(lines).map(([id, l]) => ({
+      id: +id, sku: String(l.sku_id), card: String(l.product_id), pid: l.product_id,
+      qty: l.quantity, max: l.max_quantity, selected: l.selected !== false,
+    }));
+  }
+
+  /** Puts one offer in the cart with the asked quantity; `line`: its product's line already there. */
+  async function putInCart(call, item, line) {
+    if (!line || line.card !== item.card) {
+      // a new line, or the line moves to this shop (it then keeps its old quantity)
+      const body = { product_id: +item.card, from: 'sku_product_cards' };
+      if (item.qty > 1) { body.with_qty_from_sku = true; body.quantity = item.qty; }
+      const data = await call(`/cart/add/${encodeURIComponent(item.sku)}.json`, body);
+      const l = (data.line_items_info || []).map((x) => x.line_item).find((x) => x && String(x.product_id) === item.card);
+      if (!l) throw new Error('not in the cart');
+      line = { id: l.id, qty: l.quantity, max: l.max_quantity };
+    }
+    // the same offer is only set to the asked quantity (adding it again would add to it),
+    // never above what the shop has: Skroutz would then move the line to another shop
+    const want = line.max > 0 ? Math.min(item.qty, line.max) : item.qty;
+    if (line.qty !== want) await call('/cart/change_line_item_quantity.json', { line_item_id: line.id, quantity: want });
+  }
+
+  /** A product's name as the cart page shows it. */
+  function nameOnPage(sku) {
+    for (const a of document.querySelectorAll(`a[href*="/s/${sku}/"]`)) {
+      const name = (a.textContent || a.title || '').replace(/\s+/g, ' ').trim();
+      if (name.length > 3) return name;
+    }
+    return '';
+  }
+
+  function showResult(last, T) {
+    const lines = [T.done(last.ok)];
+    const removed = last.removed || [];
+    if (removed.length) {
+      const named = removed.filter(Boolean);
+      lines.push(T.removed(removed.length), ...named.slice(0, 5).map((n) => '• ' + n));
+      if (named.length > 5) lines.push(T.more(named.length - 5));
+    }
+    if (last.notRemoved) lines.push(T.notRemoved(last.notRemoved));
+    if (last.emptyFailed) lines.push(T.emptyFailed);
+    if (last.nothingElse) lines.push(T.nothingElse);
+    if (last.emptied) lines.push(T.emptied);
+    lines.push(...last.fewer.map((f) => T.fewer(f.name, f.n)));
+    lines.push(...(last.more || []).map((f) => T.inCart(f.name, f.n)));
+    lines.push(...(last.otherShop || []).map((n) => T.otherShop(n)));
+    if (last.failed.length) lines.push(T.failed, ...last.failed.map((n) => '• ' + n));
+    const box = cartBox(lines, T.close);
+    // all done as asked: the note goes away by itself
+    if (lines.length === 1) setTimeout(() => box.remove(), 8000);
   }
 
   async function runCartJob() {
@@ -160,13 +243,7 @@
     // after the reload that follows a finished job: say what happened
     let last = null;
     try { last = JSON.parse(sessionStorage.getItem(RESULT_KEY)); sessionStorage.removeItem(RESULT_KEY); } catch { /* no storage */ }
-    if (last) {
-      const lines = [T.done(last.ok), ...last.fewer.map((f) => T.fewer(f.name, f.n))];
-      if (last.failed.length) lines.push(T.failed, ...last.failed.map((n) => '• ' + n));
-      const box = cartBox(lines, T.close);
-      if (!last.failed.length && !last.fewer.length) setTimeout(() => box.remove(), 8000);
-      return;
-    }
+    if (last) { showResult(last, T); return; }
 
     if (location.hash !== '#cartwise') return;
     // a "checking your browser" page has no token: wait for the real page
@@ -177,26 +254,99 @@
     if (!cartJob || !Array.isArray(cartJob.items) || Date.now() - cartJob.ts > 120000) return;
     await chrome.storage.local.remove('cartJob'); // claimed: never run twice
 
-    const result = { ok: 0, failed: [], fewer: [] };
+    const call = cartApi(token);
     const items = cartJob.items;
+    const result = { ok: 0, failed: [], fewer: [], more: [], otherShop: [], removed: [], notRemoved: 0, emptyFailed: false };
+    let before = null; // what the cart held before
+    try { before = await cartLines(call); } catch (e) { console.warn('CartWise: could not read the cart', e); }
+    // "empty the rest": the site's own "Remove all" first (the order is put back in
+    // right after); if that fails, the other products one by one
+    if (cartJob.empty) {
+      cartBox([T.emptyingAll]);
+      const skus = new Set(items.map((i) => i.sku));
+      const rest = before ? before.filter((l) => !skus.has(l.sku)) : [];
+      // their names, read from the page before they leave it (it draws them a moment after loading)
+      for (let i = 0; i < 15 && rest.some((l) => !nameOnPage(l.sku)); i++) await new Promise((r) => setTimeout(r, 200));
+      const names = rest.map((l) => nameOnPage(l.sku)); // '' when not shown
+      let cleared = false;
+      try {
+        const res = await fetch('/cart/clear.html', { method: 'POST', credentials: 'same-origin', headers: { 'X-CSRF-Token': token, Accept: 'text/html' } });
+        if (res.ok) {
+          let left = null;
+          try { left = await cartLines(call); } catch { /* trust the site's answer */ }
+          cleared = !left || left.length === 0;
+        }
+      } catch (e) { console.warn('CartWise: Remove all failed', e); }
+      if (cleared) {
+        result.removed = names;
+        if (!before) result.emptied = true; // what was there is not known, only that it is gone
+        else result.nothingElse = !rest.length;
+        before = [];
+      } else if (!before) result.emptyFailed = true;
+      else {
+        result.nothingElse = !rest.length;
+        for (let i = 0; i < rest.length; i++) {
+          cartBox([T.emptying(i + 1, rest.length)]);
+          try {
+            await call(`/cart/remove_line_item/${rest[i].id}.json`);
+            result.removed.push(names[i]);
+          } catch (e) {
+            result.notRemoved++;
+            console.warn('CartWise: could not remove line', rest[i].id, e);
+          }
+        }
+      }
+    }
+
+    const errors = new Set();
     for (let i = 0; i < items.length; i++) {
       cartBox([T.adding(i + 1, items.length)]);
       try {
-        const got = await addToCart(items[i], token);
-        result.ok++;
-        if (got < items[i].qty) result.fewer.push({ name: items[i].name, n: got });
+        await putInCart(call, items[i], before && before.find((l) => l.sku === items[i].sku));
       } catch (e) {
-        result.failed.push(items[i].name);
+        errors.add(items[i].sku);
         console.warn('CartWise:', items[i].name, e);
       }
     }
+
+    // what the cart holds now, product by product
+    let after = null;
+    try { after = await cartLines(call); } catch (e) { console.warn('CartWise: could not read the cart', e); }
+    const unticked = [];
+    for (const item of items) {
+      const l = after && after.find((x) => x.sku === item.sku);
+      if (!after) { if (errors.has(item.sku)) result.failed.push(item.name); else result.ok++; continue; }
+      if (!l) { result.failed.push(item.name); continue; }
+      if (l.card !== item.card) { result.otherShop.push(item.name); continue; }
+      result.ok++;
+      if (l.qty < item.qty) result.fewer.push({ name: item.name, n: l.qty });
+      else if (l.qty > item.qty) result.more.push({ name: item.name, n: l.qty });
+      if (!l.selected) unticked.push(l);
+    }
+    // a line unticked earlier would be left out at checkout: tick it
+    if (unticked.length) {
+      await call('/cart/toggle_line_item_selection', {
+        selected: true, line_item_ids: unticked.map((l) => l.id), proposal_product_ids: Object.fromEntries(after.map((l) => [l.id, l.pid])),
+      }, 'PATCH').catch((e) => console.warn('CartWise: could not tick', e));
+    }
     try { sessionStorage.setItem(RESULT_KEY, JSON.stringify(result)); } catch { /* no storage */ }
-    location.reload(); // show the cart with the new products
+    location.reload(); // show the cart as it is now
   }
   runCartJob().catch((e) => console.warn('CartWise:', e));
 
-  // Both sites can change page without a full load, so keep an eye on the URL.
-  const timer = setInterval(update, 1000);
+  // Both sites can change page without a full load. Rather than checking all the
+  // time, look when the browser says the address changed (and a few times just
+  // after, while the new page is drawn), and when the tab is shown again.
+  let pending = [];
+  function soon() {
+    for (const t of pending) clearTimeout(t);
+    pending = [0, 300, 1000, 2500].map((ms) => setTimeout(update, ms));
+  }
+  if (window.navigation) navigation.addEventListener('currententrychange', soon);
+  else timer = setInterval(update, 1000); // browsers without these notices: check every second
+  addEventListener('popstate', soon);
+  addEventListener('pageshow', soon);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) soon(); });
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local' || !(changes.cart || changes.settings || (BP && changes.bp))) return;
     mem = null;

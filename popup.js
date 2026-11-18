@@ -1,5 +1,5 @@
 import { parseSkroutzSearch } from './lib/parser.js';
-import { ORIGIN, PRODUCT_URL, BP_VER, OFFERS_VER, fetchShopsList as fetchOffers, getMeta } from './lib/skroutz.js';
+import { ORIGIN, PRODUCT_URL, BP_VER, OFFERS_VER, fetchShopsList as fetchOffers, getMeta, skFetch } from './lib/skroutz.js';
 import { optimize } from './lib/optimizer.js';
 import { t, count, setLang, defaultLang, applyStatic } from './lib/i18n.js';
 import { findMatch, fetchOffers as fetchBpOffers, fetchItemMeta, titleCodes, parseItemLink, rank, evidence } from './lib/bestprice.js';
@@ -27,6 +27,7 @@ const state = {
   currentTab: null,                           // {kind: 'sk'|'bp', id, url} when the active tab is a product page
   calcCache: {},                              // tab -> {key, result}: the last results, also for the next opening
   open: {},                                   // <details> key -> open, as the user left it
+  bgLookups: {},                              // id -> start time, while the background looks the product up
 };
 
 const $ = (id) => document.getElementById(id);
@@ -53,7 +54,12 @@ const productUrl = (item) => (isPh(item) ? item.bpItem.url : item.url || `${ORIG
 
 // ---------- storage ----------
 async function load() {
-  const data = await chrome.storage.local.get(['cart', 'settings', 'offers', 'history', 'bp', 'calc']);
+  const [data, session] = await Promise.all([
+    chrome.storage.local.get(['cart', 'settings', 'offers', 'history', 'bp', 'calc']),
+    // products the background is looking up right now (added from a page a moment ago)
+    chrome.storage.session.get('lookups').catch(() => ({})),
+  ]);
+  state.bgLookups = (session && session.lookups) || {};
   // results saved by this version (the calculation may differ in another)
   state.calcCache = (data.calc && data.calc.ver === chrome.runtime.getManifest().version && data.calc.tabs) || {};
   state.bp = {};
@@ -68,7 +74,7 @@ async function load() {
   // "buy from a specific shop" was removed: forget choices saved by that version
   if (state.cart.some((p) => 'lock' in p)) {
     for (const p of state.cart) delete p.lock;
-    chrome.storage.local.set({ cart: state.cart });
+    saveCart();
   }
 
   Object.assign(state.settings, data.settings || {});
@@ -77,19 +83,48 @@ async function load() {
   fixNames();
 }
 
-/** Products still called "Product <id>" (or without a picture) get them from what the background lookup read. */
+/**
+ * What the background lookup read from a product's page (it saves it with the
+ * prices, never in the list itself): a name for products still called
+ * "Product <id>", a picture, and the part number and brand that the BestPrice
+ * search uses (so the page is not read a second time).
+ */
 function fixNames() {
   let changed = false;
   for (const p of state.cart) {
-    const name = state.offers[p.id] && state.offers[p.id].name;
-    if (name && !isPh(p) && (!p.name || p.name.startsWith('Product '))) { p.name = name; changed = true; }
-    const image = state.offers[p.id] && state.offers[p.id].image;
-    if (image && !isPh(p) && !p.image) { p.image = image; changed = true; }
+    const o = state.offers[p.id];
+    if (!o || isPh(p)) continue;
+    if (o.name && (!p.name || p.name.startsWith('Product '))) { p.name = o.name; changed = true; }
+    if (o.image && !p.image) { p.image = o.image; changed = true; }
+    if (p.mpn === undefined && typeof o.mpn === 'string') {
+      p.mpn = o.mpn;
+      p.brand = o.brand || '';
+      if (o.url) p.url = o.url;
+      changed = true;
+    }
   }
-  if (changed) chrome.storage.local.set({ cart: state.cart });
+  if (changed) saveCart();
   return changed;
 }
-const saveCart = () => chrome.storage.local.set({ cart: state.cart });
+
+// Storage reports every change to the list back, also this window's own
+// saves, sometimes after a newer change was already made here. Those echoes
+// are recognised (by content) and skipped, so they cannot undo the newer change.
+const ownWrites = new Map(); // list as saved -> saves not reported back yet
+const canon = (cart) => JSON.stringify(cart, sortedFields);
+function saveCart() {
+  const key = canon(state.cart);
+  ownWrites.set(key, (ownWrites.get(key) || 0) + 1);
+  return chrome.storage.local.set({ cart: state.cart });
+}
+/** True when a reported list is one this window saved (and forgets it). */
+function ownEcho(cart) {
+  const key = canon(cart);
+  const n = ownWrites.get(key);
+  if (!n) return false;
+  if (n > 1) ownWrites.set(key, n - 1); else ownWrites.delete(key);
+  return true;
+}
 /** Call right before changing the cart, so Undo can bring this version back. */
 function remember() {
   state.history.push(JSON.parse(JSON.stringify(state.cart)));
@@ -133,10 +168,18 @@ async function readMeta(item) {
   } catch { /* cosmetic only */ }
 }
 
+/**
+ * The background is reading this product right now (it was just added from a
+ * page): its results arrive through storage, so it is not read twice. Older
+ * than 90 s means that lookup was given up.
+ */
+const bgBusy = (id) => Date.now() - (state.bgLookups[id] || 0) < 90000;
+
 const offerJobs = new Map();
 function loadOffers(id, force = false) {
   const cached = state.offers[id];
   if (!force && cached && Date.now() - cached.ts < CACHE_TTL) return Promise.resolve();
+  if (!force && bgBusy(id)) return Promise.resolve();
   if (!offerJobs.has(id)) offerJobs.set(id, readOffers(id).finally(() => offerJobs.delete(id)));
   return offerJobs.get(id);
 }
@@ -158,7 +201,7 @@ async function readOffers(id) {
 }
 
 async function searchSkroutz(query) {
-  const res = await fetch(`${ORIGIN}/search?keyphrase=${encodeURIComponent(query)}`, { credentials: 'omit', headers: { Accept: 'text/html' } });
+  const res = await skFetch(`${ORIGIN}/search?keyphrase=${encodeURIComponent(query)}`, { credentials: 'omit', headers: { Accept: 'text/html' } });
   if (!res.ok) throw new Error(`Skroutz answered ${res.status}`);
   const direct = res.url.match(PRODUCT_URL); // a search with one hit can land on the product itself
   if (direct) return [{ id: direct[1], url: res.url.split(/[?#]/)[0], name: query, hay: query }];
@@ -172,12 +215,14 @@ async function loadBp(id, force = false) {
   if (!item || state.bpAccess === false || state.bpStatus[id] === 'loading') return;
   const ph = isPh(item); // added from BestPrice: its BestPrice page is known, nothing to match
   if (!ph && state.settings.bestprice === false) return;
+  if (!force && bgBusy(id)) return; // the background is matching it right now
   let rec = state.bp[id] || (ph ? { v: BP_VER, item: { ...item.bpItem }, candidates: [], searched: true, confident: true, manual: true } : {});
   const fresh = rec.offers && Date.now() - rec.offersTs < CACHE_TTL;
   if (!force && (fresh || (rec.searched && !rec.item))) return;
   state.bpStatus[id] = 'loading';
   renderResults();
   try {
+    let justRead = false; // the match comes with the prices it read to verify itself
     if (!rec.item) {
       if (item.mpn === undefined) await fetchMeta(item);
       await loadOffers(id); // the shops' listing titles help to verify the match
@@ -185,8 +230,10 @@ async function loadBp(id, force = false) {
       const name = live.name.startsWith('Product ') ? (state.offers[id]?.name || live.name) : live.name;
       const m = await findMatch({ name, mpn: live.mpn || '', brand: live.brand || '', titles: state.offers[id]?.titles || [] });
       rec = { v: BP_VER, ...m, searched: true, offersTs: m.offers ? Date.now() : 0 };
+      justRead = !!m.offers;
     }
-    if (rec.item && !(rec.offers && Date.now() - rec.offersTs < 60000)) {
+    // "Refresh prices" (force) always reads them again; otherwise prices from the last minute are kept
+    if (rec.item && !justRead && (force || !(rec.offers && Date.now() - rec.offersTs < 60000))) {
       const page = await fetchBpOffers(rec.item.url);
       rec.offers = page.offers;
       rec.offersTs = Date.now();
@@ -227,11 +274,12 @@ async function grantBpAccess() {
 async function loadAllBp(force = false) {
   if (!(await checkBpAccess())) { renderResults(); return; }
   // also redo lookups that ran without the product's title (before 1.4.1)
-  for (const p of state.cart) if (isPh(p) && (!p.searched || force || p.name === 'BestPrice product')) resolvePh(p.id);
+  const phJobs = state.cart.filter((p) => isPh(p) && (!p.searched || force || p.name === 'BestPrice product')).map((p) => resolvePh(p.id));
   const on = state.settings.bestprice !== false;
   const queue = state.cart.filter((p) => (isPh(p) ? p.searched && !force : on)).map((p) => p.id);
   const worker = async () => { while (queue.length) await loadBp(queue.shift(), force); };
-  await Promise.all([worker(), worker()]);
+  // finished only when those lookups are too (the refresh button turns until then)
+  await Promise.all([worker(), worker(), ...phJobs]);
 }
 
 function chooseMatch(id, value) {
@@ -340,7 +388,7 @@ function adopt(phId, cand, page) {
   };
   if (state.cart.some((p) => p.id === cand.id)) state.cart.splice(i, 1);
   else state.cart[i] = { id: cand.id, url: cand.url, name: cand.name, image: cand.image || null, mpn: cand.mpn, brand: cand.brand, qty: ph.qty || 1 };
-  delete state.bp[phId];
+  // the placeholder's BestPrice record stays while Undo can bring it back (saveBp tidies it up after)
   delete state.phStatus[phId];
   saveCart();
   saveBp();
@@ -352,14 +400,17 @@ function adopt(phId, cand, page) {
 function pickSkroutz(phId, candId) {
   const ph = state.cart.find((p) => p.id === phId);
   const cand = ph && (ph.skCands || []).find((c) => c.id === candId);
-  if (cand) adopt(phId, cand, null);
+  if (!cand) return;
+  remember(); // a wrong pick can be taken back with Undo, and picked again
+  adopt(phId, cand, null);
 }
 
 async function loadAll(force = false) {
   const queue = state.cart.filter((p) => !isPh(p)).map((p) => p.id);
   const worker = async () => { while (queue.length) await loadOffers(queue.shift(), force); };
   $('refresh').classList.add('spin');
-  await Promise.all([worker(), worker(), worker(), loadAllBp(force)]);
+  // two Skroutz requests at a time: more makes "too many requests" likelier on long lists
+  await Promise.all([worker(), worker(), loadAllBp(force)]);
   $('refresh').classList.remove('spin');
 }
 
@@ -422,6 +473,11 @@ function setQty(id, delta) {
   saveCart();
   render();
 }
+/** Sets a product's quantity to n (Undo takes it back like any change). */
+function qtyTo(id, n) {
+  const item = state.cart.find((p) => p.id === id);
+  if (item) setQty(id, n - (item.qty || 1));
+}
 
 function emptyCart() {
   if (!state.cart.length) return;
@@ -474,10 +530,16 @@ function sources(item) {
 
 function passes(o) {
   const s = state.settings;
-  if (s.avail === 'stock' && o.stock === false) return false;
+  // "In stock only" keeps offers known to be in stock (not those whose availability is not shown)
+  if (s.avail === 'stock' && o.stock !== true) return false;
   if (s.avail === 'now' && !o.immediate) return false;
   if (+s.maxDays && !(o.days != null && o.days <= +s.maxDays)) return false;
   return true;
+}
+
+/** The most pieces one store sells among these offers (Infinity when one states no limit). */
+function mostOf(offers) {
+  return Math.max(...offers.map((o) => (o.max > 0 ? o.max : Infinity)));
 }
 
 // ---------- drawing without blinking ----------
@@ -606,17 +668,26 @@ function productMeta(item) {
   if (isPh(item)) return placeholderMeta(item);
   const data = state.offers[item.id];
   const status = state.status[item.id];
-  if (status === 'loading' && !data) return h('div', { class: 'p-meta dots' }, t('checking'));
+  if (!data && (status === 'loading' || (!status && bgBusy(item.id)))) return h('div', { class: 'p-meta dots' }, t('checking'));
   if (status === 'error' && !data) {
     return h('div', { class: 'p-meta err' }, t('loadErr'),
       h('button', { class: 'retry', onclick: () => loadOffers(item.id, true) }, t('retry')));
   }
-  if (data && !data.offers.length) return h('div', { class: 'p-meta err' }, t('noStore'));
+  // could not be read again: the totals still use the prices read before, so say so
+  const stale = status === 'error' && [h('span', { class: 'p-stale' }, t('notUpdated')), ' ',
+    h('button', { class: 'retry', onclick: () => loadOffers(item.id, true) }, t('retry')), ' · '];
+  if (data && !data.offers.length) return h('div', { class: 'p-meta err' }, stale, t('noStore'));
   if (!data) return h('div', { class: 'p-meta' }, ' ');
   const min = Math.min(...data.offers.map((o) => o.price));
   const shops = new Set(data.offers.map((o) => o.shopId)).size;
   const hub = data.offers.some((o) => o.hub);
-  return h('div', { class: 'p-meta' }, t('fromStores', { price: eur(min), stores: count(shops, 'store') }),
+  // no store sells this many: say so first, with a one-click way down to what one store has
+  const qty = item.qty || 1;
+  const most = mostOf(data.offers);
+  const short = qty > most && [h('span', { class: 'p-stale' }, t('mostPerStore', { n: most })), ' ',
+    h('button', { class: 'retry', onclick: () => qtyTo(item.id, most) }, t('setQtyTo', { n: most })), ' · '];
+  return h('div', { class: 'p-meta', title: short ? t('mostPerStoreTip', { n: most }) : null }, stale, short,
+    t('fromStores', { price: eur(min), stores: count(shops, 'store') }),
     hub && ' · ', hub && h('span', { class: 'badge hub' }, 'Hub'));
 }
 
@@ -654,7 +725,8 @@ function shipmentView(s, ctx, hideHead = false) {
     ? [h('span', { class: 'badge hub' }, 'Skroutz Hub'), h('span', {}, s.shops.join(' + '))]
     : [s.showSrc && h('span', { class: 'badge ' + (s.src === 'BestPrice' ? 'bp' : 'sk') }, s.src), h('span', {}, s.shops[0])];
   const ship = s.fee > 0
-    ? h('span', { class: 'v' }, eur(s.fee))
+    // a fee the shop does not show is an estimate: said in the tooltip only
+    ? h('span', { class: 'v', title: s.feeEstimated ? t('feeAssumed') : null }, eur(s.fee))
     : h('span', { class: 'v free' }, s.feeReason === 'plus' ? t('freePlus') : t('free'));
   return h('div', { class: 'shipment' },
     !hideHead && h('div', { class: 's-head' }, title),
@@ -681,7 +753,10 @@ function skroutzItems(sol) {
   const items = [];
   for (const s of sol.shipments) {
     if (s.key.startsWith('sbp')) continue; // BestPrice merchants are bought on their own sites
-    for (const it of s.items) if (it.cardId) items.push({ sku: String(it.productId), card: String(it.cardId), qty: it.qty || 1, name: it.name });
+    for (const it of s.items) {
+      // choice: the shop asks for a size or option first, so it is added from its page
+      if (it.cardId) items.push({ sku: String(it.productId), card: String(it.cardId), qty: it.qty || 1, name: it.name, choice: !!it.choice });
+    }
   }
   return items;
 }
@@ -726,6 +801,7 @@ function confirmCart(items, sol) {
   const stores = new Set(sk.flatMap((s) => s.shops)).size;
   const amount = sk.reduce((sum, s) => sum + s.subtotal + s.fee, 0);
   const skus = new Set(items.map((i) => i.sku));
+  const choice = items.filter((i) => i.choice).length;
 
   const empty = h('input', { type: 'checkbox' });
   // one line whose text changes in place once the cart has been read
@@ -737,6 +813,7 @@ function confirmCart(items, sol) {
       h('h3', { id: 'c-title' }, t('confirmTitle')),
       h('p', {}, t('confirmWhat', { products: count(items.length, 'product'), stores: count(stores, 'store'), amount: eur(amount) })),
       onBp > 0 && h('p', { class: 'c-note' }, t('confirmBpNote', { n: onBp })),
+      choice > 0 && h('p', { class: 'c-note' }, t('confirmChoiceNote', { n: choice })),
       h('label', { class: 'c-check' }, empty, h('span', {}, t('emptyRest'))),
       hint,
       h('div', { class: 'c-actions' },
@@ -802,7 +879,9 @@ const skroutzSettings = () => ({
   hasPlus: state.settings.hasPlus,
   delivery: state.settings.delivery,
   // Skroutz Plus: free per shipment from 15 € to a Skroutz Point, 25 € to an address
+  // (also for a shop that cannot deliver to a Point)
   plusMin: state.settings.delivery === 'home' ? 25 : 15,
+  plusMinHome: 25,
 });
 
 const TABS = ['skroutz', 'overall', 'bestprice'];
@@ -880,8 +959,9 @@ function calcHere(tab) {
 /** Products and offers for one tab. */
 function tabProducts(kind, list) {
   const products = [];
-  // other: products priced from the other site; filtered: products the availability settings leave without an offer
-  const info = { other: 0, filtered: [], missing: [] };
+  // other: products priced from the other site; filtered: products the availability settings leave without an offer;
+  // short: products no store (within those settings) sells in the quantity wanted
+  const info = { other: 0, filtered: [], missing: [], short: [] };
   for (const { item, sk, bp } of list) {
     let offers;
     if (kind === 'skroutz') {
@@ -897,7 +977,12 @@ function tabProducts(kind, list) {
     if (!offers.length) { info.missing.push(item.id); continue; }
     offers = offers.filter(passes);
     if (!offers.length) { info.filtered.push(item.name); continue; }
-    products.push({ id: item.id, name: item.name, qty: item.qty || 1, offers });
+    // The Skroutz cart takes each product from one store, and a store sells at
+    // most so many pieces: only stores that have the whole quantity count.
+    const qty = item.qty || 1;
+    const enough = offers.filter((o) => !(o.max > 0) || o.max >= qty);
+    if (!enough.length) { info.short.push({ name: item.name, most: mostOf(offers) }); continue; }
+    products.push({ id: item.id, name: item.name, qty, offers: enough });
   }
   return { products, info };
 }
@@ -964,8 +1049,20 @@ function compute() {
     const { products, info } = tabProducts(kind, list);
     const tab = { info, base: `${kind}|${sig}` };
     if (info.missing.length) { tab.block = t('removeMissing'); tab.reason = 'missing'; return tab; }
-    // the availability settings are never bent: with no fitting offer there is no result
-    if (info.filtered.length) { tab.block = t('filterBlocks', { names: info.filtered.join(', ') }); tab.reason = 'filter'; return tab; }
+    // the availability settings are never bent: with no fitting offer there is no result;
+    // nor is a store's stock: a quantity no store has gives no result either
+    if (info.filtered.length || info.short.length) {
+      const filtersOn = (s.avail && s.avail !== 'any') || +s.maxDays > 0;
+      tab.block = [
+        info.filtered.length && t('filterBlocks', { names: info.filtered.join(', ') }),
+        info.short.length && t('stockBlocks', {
+          list: info.short.map((x) => `${x.name} (${t('atMost', { n: x.most })})`).join(', '),
+          settings: filtersOn,
+        }),
+      ].filter(Boolean).join(' ');
+      tab.reason = info.filtered.length ? 'filter' : 'short';
+      return tab;
+    }
     const long = state.long[kind] === tab.base;
     const r = requestCalc(kind, tab.base + (long ? '|long' : ''), products,
       { ...skroutzSettings(), budgetMs: long ? 45000 : 5000 });
@@ -1088,8 +1185,11 @@ function matchRow(item) {
   const fits = (rec.item && rec.offers ? rec.offers : []).filter(passes);
   const from = fits.length ? Math.min(...fits.map((o) => o.price)) : null;
   let tag = null;
-  if (from != null) tag = h('span', { class: 'm-price' }, t('fromPrice2', { price: eur(from) }));
-  else if (status === 'loading') tag = h('span', { class: 'dots' }, t('searching'));
+  if (from != null) {
+    tag = [h('span', { class: 'm-price' }, t('fromPrice2', { price: eur(from) })),
+      // the price is from before: reading it again failed
+      status === 'error' && h('span', { class: 'badge bad' }, t('notUpdated'))];
+  } else if (status === 'loading') tag = h('span', { class: 'dots' }, t('searching'));
   else if (status === 'error') tag = h('span', { class: 'badge bad' }, t('couldNotLoad'));
   else if (!rec.item) tag = cands.length ? h('span', { class: 'badge warn' }, t('notSure')) : h('span', { class: 'badge bad' }, t('notFound'));
   else if (rec.offers && !rec.offers.length) tag = h('span', { class: 'badge bad' }, t('noMerchants'));
@@ -1244,6 +1344,7 @@ function renderResults() {
     const src = tab.src || (tab.key === 'overall' ? ov : sk);
     tab.text = tab.key === 'overall' && noAccess ? t('noAccessShort')
       : (src && src.reason === 'filter') ? t('checkSettings')
+      : (src && src.reason === 'short') ? t('lowerQty')
       : tab.key === 'single' && !c.block && !(src && src.block) ? t('notPossible')
       : t('unavailable');
   }
@@ -1379,6 +1480,14 @@ async function init() {
 
   // The page button (content script) and the background lookup may change the data while the popup is open.
   chrome.storage.onChanged.addListener((changes, area) => {
+    // the background finished looking products up: read here whatever it could not
+    if (area === 'session') {
+      if (!changes.lookups) return;
+      const before = state.bgLookups;
+      state.bgLookups = changes.lookups.newValue || {};
+      if (Object.keys(before).some((id) => !state.bgLookups[id])) { render(); loadAll(); }
+      return;
+    }
     if (area !== 'local') return;
     if (changes.history) { state.history = changes.history.newValue || []; $('undo').disabled = !state.history.length; }
     let fresh = false;
@@ -1392,7 +1501,9 @@ async function init() {
     if (fresh && !changes.cart) { if (fixNames()) renderProducts(); renderResults(); }
     if (!changes.cart) return;
     const next = changes.cart.newValue || [];
-    if (JSON.stringify(next) === JSON.stringify(state.cart)) return;
+    // this window's own save, reported back: already shown, and maybe changed again since
+    if (ownEcho(next)) return;
+    if (canon(next) === canon(state.cart)) return;
     state.cart = next;
     render();
     loadAll();
@@ -1406,6 +1517,10 @@ async function init() {
     if (sk) state.currentTab = { kind: 'sk', id: sk[1], url };
     else if (bp) state.currentTab = { kind: 'bp', id: bp.id, url: bp.url };
   } catch { /* no tab access */ }
+
+  // a background lookup that ends without a word (the browser stopped it): read those products here
+  const started = Object.values(state.bgLookups).filter((ts) => Date.now() - ts < 90000);
+  if (started.length) setTimeout(() => loadAll(), Math.max(...started) + 90000 - Date.now() + 200);
 
   render();
   loadAll();

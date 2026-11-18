@@ -66,7 +66,8 @@ Upload `dist/cartwise-<version>.zip`.
 - **Justification for host permissions (skroutz.gr, bestprice.gr):**
   > To read product prices and shipping costs from these two sites, to show the "Add to CartWise" button on their product pages, to see which of their product pages is open when the popup opens, and, only when the user confirms, to put the chosen offers in the user's Skroutz cart. No other site is accessed.
 - **Remote code:** No.
-- **Data usage:** tick none of the categories. CartWise sends nothing to the developer or any third party, and everything it keeps stays on the device. It does read the user's Skroutz cart, but only in the browser and only to change it at the user's request. If a reviewer disagrees, ticking "Website content" would cover the pages it reads.
+- **Data usage:** tick **Website content**. Google's user data FAQ says data handled only on the device must be declared too, and reading content from websites counts as handling it. CartWise reads product pages, price lists and, when you add to it, your own Skroutz cart. No other category applies: CartWise does not read personal or payment details, passwords, location, browsing history or what you type or click.
+  Nothing is sent to the developer or anyone else; say so where the form asks how the data is used.
 - Tick the three certifications: no selling, no use unrelated to the single purpose, no use for credit.
 - **Privacy policy URL:** `https://github.com/ekilaroglou/cartwise/blob/main/PRIVACY.md`
 

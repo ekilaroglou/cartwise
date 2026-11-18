@@ -10,7 +10,11 @@ async function lookup({ id, url, name, bp }) {
   const [sl, meta] = await Promise.all([fetchShopsList(id), getMeta(id, url).catch(() => null)]);
   // Skroutz's product name first (the price list only has the shops' own titles)
   const productName = (meta && meta.name) || sl.name || name;
-  out.offers = { v: OFFERS_VER, ts: Date.now(), name: productName, image: (meta && meta.image) || null, offers: sl.offers, titles: sl.titles };
+  out.offers = {
+    v: OFFERS_VER, ts: Date.now(), name: productName, image: (meta && meta.image) || null, offers: sl.offers, titles: sl.titles,
+    // for the popup (see fixNames): the BestPrice search uses part number and brand
+    ...(meta ? { mpn: meta.mpn || '', brand: meta.brand || '', url: meta.url || null } : {}),
+  };
   if (!bp) return out;
 
   // the same steps as the popup's loadBp

@@ -11,8 +11,9 @@ For the products in your list it reads the price of every store (including offer
 **Add to Skroutz cart** under a result asks first: it shows how many products from how many stores, and how many other products your Skroutz cart already holds, with the choice to **empty the rest of the cart**. On confirming, it opens your Skroutz cart and puts that result's Skroutz offers in it (from the chosen stores, in the chosen quantities), then shows what it did. Products that the result takes from BestPrice are bought through their links.
 
 - The Skroutz cart holds one line per product. A product already in it is moved to the chosen store and set to the chosen quantity, so pressing the button twice does not double anything.
-- A quantity is never set above what the store has; the note on the cart page says "only N available" instead.
-- With **empty the rest** ticked, every other product is removed, including ones that this result buys on BestPrice. The note lists what was removed.
+- Each offer goes in as one piece and then gets its quantity, never above what the store has (the note on the cart page then says "only N available"; the results already use only stores that sell the whole quantity, so this happens only when a store's limit dropped since the prices were read). Asking Skroutz for more than a store has would make it pick another store.
+- With **empty the rest** ticked, the other products are removed one by one before the order goes in, including ones that this result buys on BestPrice. The order's own products already in the cart stay. Skroutz's own "Remove all" is used only if a product cannot be removed and none of the order's products is in the cart. The note lists what was removed.
+- Products whose store asks for a size or option first (clothes, shoes...) are not added: the window and the note list them, to add from their page. One already in the cart keeps the size chosen for it.
 - A product you had unticked in the Skroutz cart is ticked again, so it is part of the checkout.
 
 ## Install
@@ -28,7 +29,9 @@ For the products in your list it reads the price of every store (including offer
 - A product added with the page button is priced and looked up on BestPrice right away in the background, so the totals are ready when you open the popup.
 - A product added from BestPrice is looked up on Skroutz; if the extension is not sure which Skroutz product it is, it asks you to choose.
 - The sliders button opens the settings: **I have Skroutz Plus**, **Compare with BestPrice**, **Skroutz Point / Home** delivery and **Language** (English / Ελληνικά; the default follows the browser).
-- **Availability** and **Delivery within** (settings) leave out offers that are not in stock, not immediately available, or too slow. Result lines show a note such as "in ~12 days" when the chosen offer is not in stock.
+- **Availability** and **Delivery within** (settings) leave out offers that are not in stock, not immediately available, or too slow, and offers whose availability is not shown. Result lines show a note such as "in ~12 days" when the chosen offer is not in stock.
+- Each Skroutz store sells up to a set number of pieces (Skroutz's price list shows it), and the Skroutz cart takes each product from one store. So for a quantity above 1, a store is used only when it sells the whole quantity. When no store sells that many, the results say so instead of a total, and the product line shows "at most N per store" with **set to N**.
+- A product whose prices could not be read again shows "not updated" with Retry; the totals keep using the prices read before.
 - Product names in the results link straight to the chosen shop's offer.
 - A product that Skroutz does not sell is priced from BestPrice, and its line is marked BestPrice.
 - Clicking **Products** folds the product list away (and back) to save space.
@@ -41,6 +44,7 @@ For the products in your list it reads the price of every store (including offer
 ## How shipping is calculated
 
 - One fee per store, however many items you take from it (the highest fee among those items).
+- A store that does not deliver to a Skroutz Point is counted as delivering to your address, with its fee and, with Plus, the 25 € minimum.
 - All Skroutz Hub items share one fee, even when different stores sell them.
 - A shipment is free when one of its items already ships free.
 - With Skroutz Plus, a shipment made only of Plus-eligible items is free from 15 € to a Skroutz Point and from 25 € to your home.

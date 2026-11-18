@@ -51,13 +51,14 @@
 
   /** The same change, made here: only when the background cannot be reached. */
   async function toggleHere(id, item) {
-    const { cart: saved, bp, history } = await chrome.storage.local.get(['cart', 'bp', 'history']);
+    const { cart: saved, bp, history, cartRev } = await chrome.storage.local.get(['cart', 'bp', 'history', 'cartRev']);
     const cart = Array.isArray(saved) ? saved : [];
     const before = JSON.parse(JSON.stringify(cart)); // for the popup's Undo button
     const i = indexIn(cart, bp || {}, id);
     if (i >= 0) cart.splice(i, 1); else cart.push(item);
     const past = (Array.isArray(history) ? history : []).concat([before]).slice(-30);
-    await chrome.storage.local.set({ cart, history: past });
+    // counted like every save of the list, so an open popup takes the change in
+    await chrome.storage.local.set({ cart, history: past, cartRev: (cartRev || 0) + 1 });
   }
 
   async function toggle() {
@@ -117,37 +118,35 @@
     en: {
       adding: (a, b) => `CartWise: adding to your cart… ${a} / ${b}`,
       emptying: (a, b) => `CartWise: removing the other products… ${a} / ${b}`,
-      emptyingAll: 'CartWise: emptying your cart…',
       done: (n) => `CartWise added ${n} ${n === 1 ? 'product' : 'products'} to your cart.`,
       removed: (n, list) => `Removed ${n} other ${n === 1 ? 'product' : 'products'}${list ? ':' : '.'}`,
       more: (n) => `• and ${n} more`,
       notRemoved: (n) => `${n} other ${n === 1 ? 'product' : 'products'} could not be removed.`,
-      emptyFailed: 'The rest of your cart could not be emptied.',
+      notRead: 'Your cart could not be read, so nothing else was removed from it.',
       nothingElse: 'There was nothing else in your cart to remove.',
-      emptied: 'Your cart was emptied first.',
       choice: 'Choose a size or option on their page, then add them:',
       failed: 'Could not be added (add them from their pages):',
       fewer: (name, n) => `${name}: only ${n} available`,
       inCart: (name, n) => `${name}: ${n} in your cart`,
       otherShop: (name) => `${name}: in your cart from another shop`,
+      unticked: 'In your cart but not ticked, so left out at checkout. Tick them in the cart:',
       close: 'Close',
     },
     el: {
       adding: (a, b) => `CartWise: προσθήκη στο καλάθι σου… ${a} / ${b}`,
       emptying: (a, b) => `CartWise: αφαίρεση των άλλων προϊόντων… ${a} / ${b}`,
-      emptyingAll: 'CartWise: άδειασμα του καλαθιού σου…',
       done: (n) => `Το CartWise πρόσθεσε ${n} ${n === 1 ? 'προϊόν' : 'προϊόντα'} στο καλάθι σου.`,
       removed: (n, list) => (n === 1 ? 'Αφαιρέθηκε 1 άλλο προϊόν' : `Αφαιρέθηκαν ${n} άλλα προϊόντα`) + (list ? ':' : '.'),
       more: (n) => `• και ${n} ακόμη`,
       notRemoved: (n) => (n === 1 ? '1 άλλο προϊόν δεν αφαιρέθηκε.' : `${n} άλλα προϊόντα δεν αφαιρέθηκαν.`),
-      emptyFailed: 'Το υπόλοιπο καλάθι σου δεν άδειασε.',
+      notRead: 'Το καλάθι σου δεν διαβάστηκε, οπότε δεν αφαιρέθηκε τίποτε άλλο από αυτό.',
       nothingElse: 'Δεν υπήρχε τίποτε άλλο στο καλάθι σου για αφαίρεση.',
-      emptied: 'Το καλάθι σου άδειασε πρώτα.',
       choice: 'Διάλεξε μέγεθος ή επιλογή στη σελίδα τους και πρόσθεσέ τα:',
       failed: 'Δεν προστέθηκαν (πρόσθεσέ τα από τη σελίδα τους):',
       fewer: (name, n) => `${name}: διαθέσιμα μόνο ${n}`,
       inCart: (name, n) => `${name}: ${n} στο καλάθι σου`,
       otherShop: (name) => `${name}: στο καλάθι σου από άλλο κατάστημα`,
+      unticked: 'Στο καλάθι σου αλλά χωρίς τικ, οπότε μένουν έξω από την παραγγελία. Τσέκαρέ τα στο καλάθι:',
       close: 'Κλείσιμο',
     },
   };
@@ -218,20 +217,28 @@
       if (item.choice || (line && line.sized)) return false;
       // The line moves to the new shop with its quantity: one piece first, so
       // it is never above what the new shop has (Skroutz would then pick yet
-      // another shop). It gets its quantity back if the move fails.
+      // another shop). It gets its quantity back if the move does not happen.
       const oldQty = line ? line.qty : 0;
       if (oldQty > 1) await setQty(call, line, 1);
-      let data;
+      let added = null, error = null, now = null;
       try {
         // one piece, for the same reason: the quantity is set below
-        data = await call(`/cart/add/${encodeURIComponent(item.sku)}.json`, { product_id: +item.card, from: 'sku_product_cards' });
-      } catch (e) {
-        if (oldQty > 1) await setQty(call, line, oldQty).catch(() => {});
-        throw e;
+        const data = await call(`/cart/add/${encodeURIComponent(item.sku)}.json`, { product_id: +item.card, from: 'sku_product_cards' });
+        const l = (data.line_items_info || []).map((x) => x.line_item).find((x) => x && String(x.product_id) === item.card);
+        if (l) added = { id: l.id, qty: l.quantity, max: l.max_quantity };
+      } catch (e) { error = e; }
+      if (!added) {
+        // the answer did not show it: look in the cart itself
+        now = await cartLines(call).catch(() => null);
+        added = (now && now.find((x) => x.card === item.card)) || null;
       }
-      const l = (data.line_items_info || []).map((x) => x.line_item).find((x) => x && String(x.product_id) === item.card);
-      if (!l) throw new Error('not in the cart');
-      line = { id: l.id, qty: l.quantity, max: l.max_quantity };
+      if (!added) {
+        // still at the old shop: back to its quantity
+        const cur = now ? now.find((x) => x.sku === item.sku) : line;
+        if (oldQty > 1 && cur && cur.card === line.card) await setQty(call, cur, oldQty).catch(() => {});
+        throw error || new Error('not in the cart');
+      }
+      line = added;
     }
     // the quantity is set, not added to, and never above what the shop has
     const want = line.max > 0 ? Math.min(item.qty, line.max) : item.qty;
@@ -269,12 +276,12 @@
       if (named.length > 5) lines.push(T.more(named.length - 5));
     }
     if (last.notRemoved) lines.push(T.notRemoved(last.notRemoved));
-    if (last.emptyFailed) lines.push(T.emptyFailed);
+    if (last.notRead) lines.push(T.notRead);
     if (last.nothingElse) lines.push(T.nothingElse);
-    if (last.emptied) lines.push(T.emptied);
     lines.push(...last.fewer.map((f) => T.fewer(f.name, f.n)));
     lines.push(...(last.more || []).map((f) => T.inCart(f.name, f.n)));
     lines.push(...(last.otherShop || []).map((n) => T.otherShop(n)));
+    if ((last.unticked || []).length) lines.push(T.unticked, ...last.unticked.map((n) => '• ' + n));
     if ((last.choice || []).length) lines.push(T.choice, ...last.choice.map((n) => '• ' + n));
     if (last.failed.length) lines.push(T.failed, ...last.failed.map((n) => '• ' + n));
     const box = cartBox(lines, T.close);
@@ -309,17 +316,19 @@
     const call = cartApi(token);
     const items = cartJob.items;
     const skus = new Set(items.map((i) => i.sku));
-    const result = { ok: 0, failed: [], fewer: [], more: [], otherShop: [], choice: [], removed: [], notRemoved: 0, emptyFailed: false };
+    const result = { ok: 0, failed: [], fewer: [], more: [], otherShop: [], choice: [], removed: [], notRemoved: 0, unticked: [] };
     let before = null; // what the cart held before
-    try { before = await cartLines(call); } catch (e) { console.warn('CartWise: could not read the cart', e); }
+    for (let i = 0; i < 3 && !before; i++) {
+      try { before = await cartLines(call); } catch (e) { console.warn('CartWise: could not read the cart', e); if (i < 2) await pause(1500); }
+    }
 
     // "Empty the rest", before the order goes in: the other products one by
     // one, so this order's products already in the cart stay as they are.
     if (cartJob.empty) {
       if (!before) {
-        // the cart could not be read: the site's own "Remove all", then the order goes in
-        cartBox([T.emptyingAll]);
-        if (await removeAll(token, call)) { result.emptied = true; before = []; } else result.emptyFailed = true;
+        // What else is in the cart is not known, so nothing is removed: the
+        // site's own "Remove all" would take this order's products with it.
+        result.notRead = true;
       } else {
         const rest = before.filter((l) => !skus.has(l.sku));
         result.nothingElse = !rest.length;
@@ -372,16 +381,27 @@
       if (!after) { if (errors.has(item.sku)) result.failed.push(item.name); else result.ok++; continue; }
       if (!l) { result.failed.push(item.name); continue; }
       if (!right) { result.otherShop.push(item.name); continue; }
-      result.ok++;
       if (l.qty < item.qty) result.fewer.push({ name: item.name, n: l.qty });
       else if (l.qty > item.qty) result.more.push({ name: item.name, n: l.qty });
-      if (!l.selected) unticked.push(l);
+      if (l.selected) result.ok++; else unticked.push({ l, item });
     }
-    // a line unticked earlier would be left out at checkout: tick it
+    // A line unticked earlier would be left out at checkout: tick it, then look
+    // again. One that stays unticked is not counted as done, and the note says so.
     if (unticked.length) {
-      await call('/cart/toggle_line_item_selection', {
-        selected: true, line_item_ids: unticked.map((l) => l.id), proposal_product_ids: Object.fromEntries(after.map((l) => [l.id, l.pid])),
-      }, 'PATCH').catch((e) => console.warn('CartWise: could not tick', e));
+      let ticked = false;
+      try {
+        await call('/cart/toggle_line_item_selection', {
+          selected: true, line_item_ids: unticked.map((u) => u.l.id), proposal_product_ids: Object.fromEntries(after.map((l) => [l.id, l.pid])),
+        }, 'PATCH');
+        ticked = true;
+      } catch (e) { console.warn('CartWise: could not tick', e); }
+      let now = null;
+      try { now = await cartLines(call); } catch (e) { console.warn('CartWise: could not read the cart', e); }
+      for (const { l, item } of unticked) {
+        // the cart could not be read again: the answer to the request is all there is
+        const selected = now ? !!now.find((x) => x.id === l.id && x.selected) : ticked;
+        if (selected) result.ok++; else result.unticked.push(item.name);
+      }
     }
     await chrome.storage.local.set({ [RESULT_KEY]: { ts: Date.now(), result } });
     // show the cart as it is now; the reloaded page shows the result

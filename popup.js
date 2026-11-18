@@ -2,7 +2,7 @@ import { parseSkroutzSearch } from './lib/parser.js';
 import { ORIGIN, PRODUCT_URL, BP_VER, OFFERS_VER, fetchShopsList as fetchOffers, getMeta, skFetch } from './lib/skroutz.js';
 import { optimize } from './lib/optimizer.js';
 import { t, count, setLang, defaultLang, applyStatic } from './lib/i18n.js';
-import { findMatch, fetchOffers as fetchBpOffers, fetchItemMeta, titleCodes, parseItemLink, rank, evidence } from './lib/bestprice.js';
+import { findMatch, fetchOffers as fetchBpOffers, fetchItemMeta, titleCodes, parseItemLink, rank, evidence, sameModel, conflict } from './lib/bestprice.js';
 
 const CACHE_TTL = 15 * 60 * 1000;
 const HISTORY_MAX = 30;
@@ -55,22 +55,32 @@ const productUrl = (item) => (isPh(item) ? item.bpItem.url : item.url || `${ORIG
 // ---------- storage ----------
 async function load() {
   const [data, session] = await Promise.all([
-    chrome.storage.local.get(['cart', 'settings', 'offers', 'history', 'bp', 'calc']),
+    chrome.storage.local.get(['cart', 'cartRev', 'settings', 'offers', 'history', 'bp', 'calc']),
     // products the background is looking up right now (added from a page a moment ago)
     chrome.storage.session.get('lookups').catch(() => ({})),
   ]);
   state.bgLookups = (session && session.lookups) || {};
   // results saved by this version (the calculation may differ in another)
   state.calcCache = (data.calc && data.calc.ver === chrome.runtime.getManifest().version && data.calc.tabs) || {};
-  state.bp = {};
-  for (const [id, rec] of Object.entries(data.bp || {})) {
-    if (!rec) continue;
-    if (rec.v === BP_VER) state.bp[id] = rec;
-    // version 3 matches are still right; only their saved prices lack stock and links
-    else if (rec.v === 3) state.bp[id] = { ...rec, v: BP_VER, offers: null, offersTs: 0 };
-  }
   state.history = Array.isArray(data.history) ? data.history : [];
   state.cart = Array.isArray(data.cart) ? data.cart : [];
+  synced = { rev: data.cartRev || 0, cart: copy(state.cart) };
+  // the products' names, also of those Undo can bring back (for checking old matches)
+  const names = {};
+  for (const list of [state.cart, ...[...state.history].reverse()]) for (const p of list) names[p.id] ??= p.name;
+  state.bp = {};
+  let older = false;
+  for (const [id, rec] of Object.entries(data.bp || {})) {
+    if (!rec) continue;
+    if (rec.v === BP_VER) { state.bp[id] = rec; continue; }
+    older = true;
+    if (rec.v >= 3 && rec.v < BP_VER) {
+      const kept = oldMatch(id, rec, names[id]);
+      if (kept) state.bp[id] = kept;
+    }
+  }
+  // saved at once, so the page button on bestprice.gr and the background see the same
+  if (older) saveBp();
   // "buy from a specific shop" was removed: forget choices saved by that version
   if (state.cart.some((p) => 'lock' in p)) {
     for (const p of state.cart) delete p.lock;
@@ -81,6 +91,31 @@ async function load() {
   state.offers = {};
   for (const [id, o] of Object.entries(data.offers || {})) if (o && o.v === OFFERS_VER) state.offers[id] = o;
   fixNames();
+}
+
+/**
+ * A BestPrice record saved by an older version, whose matching was looser:
+ * what is kept of it, or null to look for the match again with today's rules.
+ * `skName`: the name of the product it belongs to.
+ */
+function oldMatch(id, rec, skName) {
+  // found automatically: looked for again
+  if (!rec.manual || !rec.item) return null;
+  // version 3 prices lack stock and links, so they are read again
+  const kept = { ...rec, v: BP_VER, ...(rec.v < 4 ? { offers: null, offersTs: 0 } : {}) };
+  // a product added from BestPrice: the record is that product itself
+  if (id.startsWith('bp')) return kept;
+  // Chosen by the user, or the Skroutz product found for one added from
+  // BestPrice: older versions chose that one automatically too, and saved it
+  // the same way. When today's rules say the two are different products, the
+  // user is asked again, with this match as the one to choose.
+  const bpName = rec.item.name || '';
+  if (!bpName || !skName || /^Product \d+$/.test(skName)) return kept;
+  const fromBp = !(rec.candidates && rec.candidates.length); // not picked from a list of BestPrice candidates
+  if (conflict(skName, bpName) || (fromBp && !sameModel(skName, bpName))) {
+    return { v: BP_VER, item: null, confident: false, searched: true, candidates: [{ id: rec.item.id, url: rec.item.url, name: bpName }], offers: null, offersTs: 0 };
+  }
+  return kept;
 }
 
 /**
@@ -107,29 +142,64 @@ function fixNames() {
   return changed;
 }
 
-// Storage reports every change to the list back, also this window's own
-// saves, sometimes after a newer change was already made here. Those echoes
-// are recognised (by content) and skipped, so they cannot undo the newer change.
-const ownWrites = new Map(); // list as saved -> saves not reported back yet
+// Two places change the list: this window, and the background (for the page
+// button). Each change is saved under one lock that both take, onto the list
+// as it is stored at that moment, and counts up `cartRev`. So a change made
+// here keeps what the background changed meanwhile, and the other way round;
+// and this window tells its own saves (reported back by storage, sometimes
+// late) from changes made elsewhere.
+const CART_LOCK = 'cartwise-cart';
+const withLock = (fn) => (navigator.locks ? navigator.locks.request(CART_LOCK, fn) : fn());
 const canon = (cart) => JSON.stringify(cart, sortedFields);
+const copy = (x) => JSON.parse(JSON.stringify(x));
+let synced = { rev: 0, cart: [] }; // the stored list as this window last read or saved it
+
+/** `mine` with the changes made elsewhere since `base` (which gave `theirs`). */
+function mergeCart(base, mine, theirs) {
+  const was = new Map(base.map((p) => [p.id, p]));
+  const now = new Map(theirs.map((p) => [p.id, p]));
+  const here = new Set(mine.map((p) => p.id));
+  const out = [];
+  for (const p of mine) {
+    const b = was.get(p.id), t = now.get(p.id);
+    if (b && !t) continue; // removed elsewhere
+    // changed elsewhere and not here: that change
+    out.push(b && t && canon(t) !== canon(b) && canon(p) === canon(b) ? t : p);
+  }
+  for (const t of theirs) if (!was.has(t.id) && !here.has(t.id)) out.push(t); // added elsewhere
+  return out;
+}
+
 function saveCart() {
-  const key = canon(state.cart);
-  ownWrites.set(key, (ownWrites.get(key) || 0) + 1);
-  return chrome.storage.local.set({ cart: state.cart });
+  return withLock(async () => {
+    const { cart: stored, cartRev = 0 } = await chrome.storage.local.get(['cart', 'cartRev']);
+    if (cartRev !== synced.rev) {
+      // changed elsewhere since this window read it (the report may not have arrived yet)
+      const merged = mergeCart(synced.cart, state.cart, Array.isArray(stored) ? stored : []);
+      if (canon(merged) !== canon(state.cart)) { state.cart = merged; render(); loadAll(); }
+    }
+    const before = synced;
+    const cart = copy(state.cart);
+    synced = { rev: cartRev + 1, cart }; // before the save: its report must find it
+    try {
+      await chrome.storage.local.set({ cart, cartRev: cartRev + 1 });
+    } catch (e) {
+      synced = before;
+      throw e;
+    }
+  });
 }
-/** True when a reported list is one this window saved (and forgets it). */
-function ownEcho(cart) {
-  const key = canon(cart);
-  const n = ownWrites.get(key);
-  if (!n) return false;
-  if (n > 1) ownWrites.set(key, n - 1); else ownWrites.delete(key);
-  return true;
-}
+
 /** Call right before changing the cart, so Undo can bring this version back. */
 function remember() {
-  state.history.push(JSON.parse(JSON.stringify(state.cart)));
+  const snap = copy(state.cart);
+  state.history.push(snap);
   if (state.history.length > HISTORY_MAX) state.history.shift();
-  chrome.storage.local.set({ history: state.history });
+  // added to the history as it is stored now (the background adds to it too)
+  withLock(async () => {
+    const { history } = await chrome.storage.local.get('history');
+    await chrome.storage.local.set({ history: (Array.isArray(history) ? history : []).concat([snap]).slice(-HISTORY_MAX) });
+  });
 }
 const saveSettings = () => chrome.storage.local.set({ settings: state.settings });
 function saveOffers() {
@@ -216,11 +286,20 @@ async function loadBp(id, force = false) {
   const ph = isPh(item); // added from BestPrice: its BestPrice page is known, nothing to match
   if (!ph && state.settings.bestprice === false) return;
   if (!force && bgBusy(id)) return; // the background is matching it right now
-  let rec = state.bp[id] || (ph ? { v: BP_VER, item: { ...item.bpItem }, candidates: [], searched: true, confident: true, manual: true } : {});
+  const started = state.bp[id]; // the record this lookup is for
+  let rec = started || (ph ? { v: BP_VER, item: { ...item.bpItem }, candidates: [], searched: true, confident: true, manual: true } : {});
   const fresh = rec.offers && Date.now() - rec.offersTs < CACHE_TTL;
   if (!force && (fresh || (rec.searched && !rec.item))) return;
   state.bpStatus[id] = 'loading';
   renderResults();
+  // The user chose or pasted another match while this one was read: that
+  // choice stands; this answer is dropped and the new match is read instead.
+  const replaced = () => {
+    if (state.bp[id] === started) return false;
+    delete state.bpStatus[id];
+    loadBp(id, true);
+    return true;
+  };
   try {
     let justRead = false; // the match comes with the prices it read to verify itself
     if (!rec.item) {
@@ -239,10 +318,12 @@ async function loadBp(id, force = false) {
       rec.offersTs = Date.now();
       if (!rec.item.name) rec.item.name = page.name || (await fetchItemMeta(rec.item.url)).name || 'BestPrice product';
     }
+    if (replaced()) return;
     state.bp[id] = rec;
     delete state.bpStatus[id];
     saveBp();
   } catch (e) {
+    if (replaced()) return;
     state.bpStatus[id] = 'error';
     console.warn('CartWise (BestPrice):', id, e);
   }
@@ -351,7 +432,7 @@ async function resolvePh(phId) {
         const ev = evidence({ name: meta.name, mpn: meta.mpn, titles: sl.titles }, { name: bpName, titles: page.titles });
         if (ev.strong) {
           state.offers[c.id] = { v: OFFERS_VER, ts: Date.now(), name: sl.name, offers: sl.offers, titles: sl.titles };
-          adopt(phId, cand, page);
+          adopt(phId, cand, page, true);
           adopted = true;
           break;
         }
@@ -362,7 +443,8 @@ async function resolvePh(phId) {
     if (!adopted) {
       open.sort((a, b) => b.base - a.base);
       const [top, next] = open;
-      if (top && top.base >= 0.75 && (!next || top.base - next.base >= 0.15)) adopt(phId, top, page);
+      // on the names alone only when they are clearly the same model (not Galaxy A55 for A56)
+      if (top && top.base >= 0.75 && (!next || top.base - next.base >= 0.15) && sameModel(bpName, top.name)) adopt(phId, top, page, true);
       else {
         const live = state.cart.find((p) => p.id === phId);
         if (live) { live.skCands = open; live.searched = true; saveCart(); }
@@ -376,14 +458,19 @@ async function resolvePh(phId) {
   render();
 }
 
-/** Replace a BestPrice placeholder with the Skroutz product it corresponds to. */
-function adopt(phId, cand, page) {
+/**
+ * Replace a BestPrice placeholder with the Skroutz product it corresponds to.
+ * `auto`: that Skroutz product was found automatically, not picked by the user.
+ */
+function adopt(phId, cand, page, auto = false) {
   const i = state.cart.findIndex((p) => p.id === phId);
   if (i < 0) return;
   const ph = state.cart[i];
+  // The BestPrice product is the user's own (manual: never replaced by a lookup);
+  // `auto` records that the Skroutz side was not, so later rules can check it again.
   state.bp[cand.id] = {
     v: BP_VER, item: { ...ph.bpItem, name: ph.bpItem.name || ph.name }, candidates: [],
-    searched: true, confident: true, manual: true,
+    searched: true, confident: true, manual: true, ...(auto ? { auto: true } : {}),
     offers: page ? page.offers : null, offersTs: page ? Date.now() : 0,
   };
   if (state.cart.some((p) => p.id === cand.id)) state.cart.splice(i, 1);
@@ -494,12 +581,20 @@ function emptyCart() {
 function undo() {
   if (!state.history.length) return;
   const current = Object.fromEntries(state.cart.map((p) => [p.id, p]));
-  state.cart = state.history.pop().map((p) => {
+  const snap = state.history.pop();
+  state.cart = snap.map((p) => {
     // keep the name / picture we have learned since that version was saved
     const now = current[p.id];
     return now ? { ...p, name: now.name, image: now.image || p.image, url: now.url || p.url } : p;
   });
-  chrome.storage.local.set({ history: state.history });
+  // taken out of the history as it is stored now (normally its last version)
+  withLock(async () => {
+    const { history } = await chrome.storage.local.get('history');
+    const list = Array.isArray(history) ? history.slice() : [];
+    const key = canon(snap);
+    for (let i = list.length - 1; i >= 0; i--) if (canon(list[i]) === key) { list.splice(i, 1); break; }
+    await chrome.storage.local.set({ history: list });
+  });
   saveCart();
   flash('');
   render();
@@ -793,8 +888,12 @@ function readSkCart() {
   return promise;
 }
 
-/** "Add to your Skroutz cart?" with the choice to empty the rest of that cart. */
-function confirmCart(items, sol) {
+/**
+ * "Add to your Skroutz cart?" with the choice to empty the rest of that cart.
+ * `from`: where the result comes from (see cartButton); it is checked again
+ * before anything is sent.
+ */
+function confirmCart(items, sol, from) {
   if (document.querySelector('dialog.confirm')) return; // already asking
   const sk = sol.shipments.filter((s) => !s.key.startsWith('sbp'));
   const onBp = sol.shipments.filter((s) => s.key.startsWith('sbp')).reduce((n, s) => n + s.items.length, 0);
@@ -808,18 +907,34 @@ function confirmCart(items, sol) {
   const hint = h('p', { class: 'c-hint' }, t('checkingSkCart'));
   const ok = h('button', { class: 'btn primary', type: 'submit', value: 'ok' }, t('confirmAdd'));
   empty.addEventListener('change', () => { ok.textContent = t(empty.checked ? 'confirmEmptyAdd' : 'confirmAdd'); });
-  const dlg = h('dialog', { class: 'confirm', 'aria-labelledby': 'c-title' },
-    h('form', { method: 'dialog' },
-      h('h3', { id: 'c-title' }, t('confirmTitle')),
-      h('p', {}, t('confirmWhat', { products: count(items.length, 'product'), stores: count(stores, 'store'), amount: eur(amount) })),
-      onBp > 0 && h('p', { class: 'c-note' }, t('confirmBpNote', { n: onBp })),
-      choice > 0 && h('p', { class: 'c-note' }, t('confirmChoiceNote', { n: choice })),
-      h('label', { class: 'c-check' }, empty, h('span', {}, t('emptyRest'))),
-      hint,
-      h('div', { class: 'c-actions' },
-        h('button', { class: 'btn', type: 'submit', value: 'cancel' }, t('cancel')),
-        ok)));
+  const form = h('form', { method: 'dialog' },
+    h('h3', { id: 'c-title' }, t('confirmTitle')),
+    h('p', {}, t('confirmWhat', { products: count(items.length, 'product'), stores: count(stores, 'store'), amount: eur(amount) })),
+    onBp > 0 && h('p', { class: 'c-note' }, t('confirmBpNote', { n: onBp })),
+    choice > 0 && h('p', { class: 'c-note' }, t('confirmChoiceNote', { n: choice })),
+    h('label', { class: 'c-check' }, empty, h('span', {}, t('emptyRest'))),
+    hint,
+    h('div', { class: 'c-actions' },
+      h('button', { class: 'btn', type: 'submit', value: 'cancel' }, t('cancel')),
+      ok));
+  const dlg = h('dialog', { class: 'confirm', 'aria-labelledby': 'c-title' }, form);
   dlg.returnValue = '';
+  // Before sending: the list, its prices or the settings may have changed while
+  // the question was open (a product added from a page, prices read again). The
+  // order goes only if the result for the list as it is now is this same one.
+  form.addEventListener('submit', (e) => {
+    if (!e.submitter || e.submitter.value !== 'ok') return; // Cancel closes as usual
+    e.preventDefault();
+    ok.disabled = true;
+    hint.classList.remove('c-warn');
+    hint.textContent = t('checkingResult');
+    stillShown(from, items).then((same) => {
+      if (!dlg.isConnected) return;
+      if (same) { dlg.close('ok'); return; }
+      hint.classList.add('c-warn');
+      hint.textContent = t('resultChanged');
+    });
+  });
   dlg.addEventListener('close', () => {
     if (dlg.returnValue === 'ok') sendToSkroutzCart(items, empty.checked);
     dlg.remove();
@@ -829,31 +944,70 @@ function confirmCart(items, sol) {
   document.body.append(dlg); // outside #app: not part of the saved copy of the window
   dlg.showModal();
   ok.focus();
+  // (the line is left alone once it says that the result is being checked)
   readSkCart().then((lines) => {
-    if (!dlg.isConnected) return;
+    if (!dlg.isConnected || ok.disabled) return;
     // a product of this order that is already there is updated, not counted as "other"
     const others = lines.filter((l) => !skus.has(l.sku)).length;
     // Seeing nothing else proves little: some browsers send this read without the
     // Skroutz login, and get an empty guest cart. So the choice always stays, and
     // the cart page (which has the login) does the emptying.
     hint.textContent = others ? t('othersInSkCart', { n: others }) : t('emptyRestHint');
-  }, () => { if (dlg.isConnected) hint.textContent = t('emptyRestHint'); });
+  }, () => { if (dlg.isConnected && !ok.disabled) hint.textContent = t('emptyRestHint'); });
 }
 
-function cartButton(sol) {
+// ---------- is a result still the one for the list as it is now? ----------
+const BUSY = 'busy';
+/**
+ * The result a cart button was made for, worked out again for the list, its
+ * prices and the settings as they are now: BUSY while it is being calculated,
+ * null when there is none. `from`: {kind: the calculation (tab), pick(res, c)}.
+ */
+function shownSol(from) {
+  const c = compute();
+  if (c.wait) return BUSY;
+  if (c.block) return null;
+  const tab = c.tabs[from.kind];
+  if (!tab) return c.busy ? BUSY : null;
+  if (tab.block) return null;
+  if (!tab.res || tab.stale) return BUSY;
+  if (tab.res.error) return null;
+  return from.pick(tab.res, c) || null;
+}
+/** The same offers in the same quantities. */
+const orderKey = (items) => items.map((i) => [i.sku, i.card, i.qty, i.choice ? 1 : 0].join(':')).sort().join('|');
+/** Waits (a few seconds at most) for a calculation in progress, then compares. */
+async function stillShown(from, items) {
+  for (let i = 0; i < 40; i++) {
+    const now = shownSol(from);
+    if (now !== BUSY) return !!now && orderKey(skroutzItems(now)) === orderKey(items);
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return false;
+}
+
+function cartButton(sol, from) {
   const items = skroutzItems(sol);
   if (!items.length) return null;
   const mixed = sol.shipments.some((s) => s.key.startsWith('sbp'));
   return h('div', { class: 'r-actions' },
     h('button', {
-      class: 'btn primary', type: 'button', onclick: () => confirmCart(items, sol),
+      class: 'btn primary', type: 'button',
+      // a result being recalculated (the list changed) cannot be bought
+      onclick: () => {
+        const now = shownSol(from);
+        if (now === BUSY) return;
+        if (!now || orderKey(skroutzItems(now)) !== orderKey(items)) { renderResults(); return; }
+        confirmCart(items, sol, from);
+      },
       // start reading the Skroutz cart as the pointer arrives, so the question is complete when it opens
       onpointerenter: () => { readSkCart().catch(() => {}); },
       onfocus: () => { readSkCart().catch(() => {}); },
     }, t(mixed ? 'addSkPartToCart' : 'addToSkCart')));
 }
 
-function resultCard({ kicker, title, sol, badge, note, warn, extra, noCart }, ctx) {
+/** `from`: where `sol` comes from, so its cart button can check it is still current (see shownSol). */
+function resultCard({ kicker, title, sol, badge, note, warn, extra, noCart, from }, ctx) {
   return h('article', { class: 'result' },
     h('div', { class: 'r-head' },
       h('div', {},
@@ -867,7 +1021,7 @@ function resultCard({ kicker, title, sol, badge, note, warn, extra, noCart }, ct
     warn,
     // a lone store shipment would just repeat the card title
     sol.shipments.map((s) => shipmentView(s, ctx, sol.shipments.length === 1 && !s.hub && !s.showSrc && s.shops[0] === title)),
-    !noCart && cartButton(sol),
+    !noCart && cartButton(sol, from),
     extra);
 }
 
@@ -1031,7 +1185,8 @@ function compute() {
   c.busy = c.bpOn && state.bpAccess !== false
     && c.recs.some((r) => (!r.rec.searched && !r.rec.item && r.status !== 'error')
       || (r.rec.item && !r.rec.offers && r.status === 'loading'));
-  c.priced = c.recs.filter((r) => r.rec.item && r.rec.offers && r.rec.offers.length);
+  // products with BestPrice prices: those matched there, and those added from there
+  c.priced = state.cart.map((item) => state.bp[item.id] || {}).filter((rec) => rec.item && rec.offers && rec.offers.length);
   if (c.block) return c;
 
   const list = state.cart.map((item) => ({ item, ...sources(item) }));
@@ -1130,6 +1285,7 @@ function panelSingle(c, ctx) {
     kicker: t('bestSingle'),
     title: single.hub ? `Skroutz Hub · ${count(hubStores, 'store')}` : single.label,
     sol: single,
+    from: { kind: 'skroutz', pick: (r) => r.single[0] },
     badge: n > 1 && (best
       ? h('span', { class: 'badge win' }, t('alsoCheapestSk'))
       : h('span', { class: 'badge warn' }, t('moreThanSplit', { amount: eur(single.total - tab.res.overall.total) }))),
@@ -1153,6 +1309,7 @@ function panelSkroutz(c, ctx) {
     kicker: t('cheapestSk'),
     title: `${count(stores, 'store')} · ${count(overall.shipments.length, 'shipment')}`,
     sol: overall,
+    from: { kind: 'skroutz', pick: (r) => r.overall },
     badge: single && (saving > 0.004
       ? h('span', { class: 'badge save' }, t('savesVsSingle', { amount: eur(saving) }))
       : h('span', { class: 'badge win' }, t('sameAsSingle'))),
@@ -1267,6 +1424,7 @@ function panelMix(c, ctx) {
       kicker: t('withBp'),
       title: mix.from.sk ? t('split', { sk: mix.from.sk, bp: mix.from.bp }) : t('allBp'),
       sol: mix.sol,
+      from: { kind: 'overall', pick: (r, now) => (now.mix && now.mix.wins ? now.mix.sol : null) },
       badge: mix.gain != null && h('span', { class: 'badge save' }, t('savesVsSk', { amount: eur(mix.gain) })),
       warn: stoppedNote('overall', tab, mix.sol),
       extra: matches,
@@ -1500,11 +1658,15 @@ async function init() {
     }
     if (fresh && !changes.cart) { if (fixNames()) renderProducts(); renderResults(); }
     if (!changes.cart) return;
-    const next = changes.cart.newValue || [];
-    // this window's own save, reported back: already shown, and maybe changed again since
-    if (ownEcho(next)) return;
-    if (canon(next) === canon(state.cart)) return;
-    state.cart = next;
+    // this window's own save reported back (or one older than what it has seen): nothing new
+    const rev = changes.cartRev ? changes.cartRev.newValue || 0 : null;
+    if (rev != null && rev <= synced.rev) return;
+    // changed elsewhere (the page button): taken in, keeping the changes made here meanwhile
+    const next = Array.isArray(changes.cart.newValue) ? changes.cart.newValue : [];
+    const merged = mergeCart(synced.cart, state.cart, next);
+    synced = { rev: rev ?? synced.rev, cart: copy(next) };
+    if (canon(merged) === canon(state.cart)) return;
+    state.cart = merged;
     render();
     loadAll();
   });

@@ -1,7 +1,8 @@
 // The background part of CartWise. Only a page's "+ Add to CartWise" button
 // wakes it (other changes to the saved data do not):
-//   * it makes the change to the list, one change after another, so two pages
-//     adding at the same moment cannot undo each other;
+//   * it makes the change to the list, one change after another (under a lock
+//     the popup takes too), so two pages adding at the same moment, or a page
+//     and the popup, cannot undo each other;
 //   * a product added from a Skroutz page while the popup is closed is priced
 //     and found on BestPrice right away (in an offscreen page, which can read
 //     HTML), so the popup has everything when it opens. While it is being
@@ -18,6 +19,10 @@ function serial(fn) {
   chain = job.catch(() => {});
   return job;
 }
+// The popup changes the list too: both take this lock around reading and
+// saving it, and count up `cartRev` with every save (see saveCart in popup.js).
+const CART_LOCK = 'cartwise-cart';
+const withLock = (fn) => (navigator.locks ? navigator.locks.request(CART_LOCK, fn) : serial(fn));
 
 /** The list entry of a page's product, or -1 (the same rule as the page button). */
 function indexIn(cart, bp, isBp, id) {
@@ -28,13 +33,13 @@ function indexIn(cart, bp, isBp, id) {
 
 /** Adds the page's product to the list, or removes it when it is there. */
 async function toggle({ bp: isBp, id, item }) {
-  const data = await chrome.storage.local.get(['cart', 'bp', 'history']);
+  const data = await chrome.storage.local.get(['cart', 'bp', 'history', 'cartRev']);
   const cart = Array.isArray(data.cart) ? data.cart : [];
   const before = JSON.parse(JSON.stringify(cart)); // for the popup's Undo
   const i = indexIn(cart, data.bp || {}, isBp, id);
   if (i >= 0) cart.splice(i, 1); else cart.push(item);
   const history = (Array.isArray(data.history) ? data.history : []).concat([before]).slice(-HISTORY_MAX);
-  await chrome.storage.local.set({ cart, history });
+  await chrome.storage.local.set({ cart, history, cartRev: (data.cartRev || 0) + 1 });
   return { inList: i < 0, count: cart.length, added: i < 0 ? item : null };
 }
 
@@ -48,7 +53,7 @@ function valid(msg) {
 chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (!msg || msg.target !== 'background' || msg.type !== 'toggle') return false;
   if (!valid(msg)) { reply({ error: 'bad request' }); return false; }
-  serial(() => toggle(msg)).then(async (res) => {
+  withLock(() => toggle(msg)).then(async (res) => {
     reply({ inList: res.inList, count: res.count });
     // a Skroutz product added while the popup is closed: look it up now
     // (products added from BestPrice are matched by the popup)

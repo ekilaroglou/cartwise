@@ -12,9 +12,11 @@ For the products in your list it reads the price of every store (including offer
 
 - The Skroutz cart holds one line per product. A product already in it is moved to the chosen store and set to the chosen quantity, so pressing the button twice does not double anything.
 - Each offer goes in as one piece and then gets its quantity, never above what the store has (the note on the cart page then says "only N available"; the results already use only stores that sell the whole quantity, so this happens only when a store's limit dropped since the prices were read). Asking Skroutz for more than a store has would make it pick another store.
-- With **empty the rest** ticked, the other products are removed one by one before the order goes in, including ones that this result buys on BestPrice. The order's own products already in the cart stay. Skroutz's own "Remove all" is used only if a product cannot be removed and none of the order's products is in the cart. The note lists what was removed.
+- With **empty the rest** ticked, the other products are removed one by one before the order goes in, including ones that this result buys on BestPrice. The order's own products already in the cart stay. Skroutz's own "Remove all" is used only if a product cannot be removed and none of the order's products is in the cart. If the cart cannot be read at all, nothing is removed. The note lists what was removed.
+- A product moved to another shop gets its quantity back if the move does not happen.
+- While a result is being recalculated (the list just changed), its button waits for the new result. Pressing **Add to cart** in the question checks once more that the result for the list, its prices and the settings as they are now is still the same; if not, nothing is sent and the question says so.
 - Products whose store asks for a size or option first (clothes, shoes...) are not added: the window and the note list them, to add from their page. One already in the cart keeps the size chosen for it.
-- A product you had unticked in the Skroutz cart is ticked again, so it is part of the checkout.
+- A product you had unticked in the Skroutz cart is ticked again, so it is part of the checkout. If it stays unticked, it is not counted as added, and the note asks you to tick it.
 
 ## Install
 
@@ -55,7 +57,8 @@ These are the rules Skroutz shows on its product pages and help centre; the fina
 
 ## BestPrice comparison
 
-- Each Skroutz product is searched on BestPrice by name and manufacturer part number. A candidate is accepted only when it is verified: the part number, or identical shop listing titles, appear on both sites, and the names do not disagree on capacity, wattage, length or colour.
+- Each Skroutz product is searched on BestPrice by name and manufacturer part number. Names that disagree on capacity, wattage, length, colour or model code (Galaxy A55 / A56) are never the same product. A candidate is accepted when it is verified: the part number, or identical shop listing titles, appear on both sites. Without that, only a name that is nearly identical and the same model is accepted: every number and code of one name is in the other, and the same variant words (Pro, Plus, Ultra...). The same rules apply the other way round, for products added from BestPrice.
+- Matches found automatically by versions before 1.13.2 are looked for again once, with these rules. A match chosen by you, or a Skroutz product that an older version found for a product added from BestPrice, is kept unless these rules call the two different products; then you are asked again ("not sure"), with that match as the one to choose.
 - When nothing can be verified the product is left unmatched and you choose it yourself under **Matched products** in the With BestPrice tab (or paste a BestPrice link). **change** next to a match lets you replace it.
 - One shipping fee per merchant (the highest among the items taken from it). Merchants that state no shipping cost are assumed to charge 3,50 €.
 - You buy on each merchant's own site, so there is no Skroutz Hub or Plus, and payment extras such as cash on delivery are not included.

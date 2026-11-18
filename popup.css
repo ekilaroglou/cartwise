@@ -288,6 +288,8 @@ select option, select optgroup { background: var(--card); color: var(--text); }
 
 /* a result being recalculated keeps showing, dimmed only if it takes a moment */
 .tab b.stale, #panel.stale { opacity: .45; transition: opacity .2s .3s; }
+/* the previous result, shown while the new one is calculated: its cart button does nothing */
+#panel.stale .r-actions .btn { cursor: progress; }
 
 /* the add button keeps its place when there is nothing to add */
 .btn.primary.idle:disabled { background: transparent; border: 1px dashed var(--line); color: var(--muted); opacity: 1; font-weight: 600; }
@@ -307,6 +309,8 @@ dialog.confirm h3 { font-size: 15px; font-weight: 700; }
 .c-check input:disabled, .c-check input:disabled + span { color: var(--muted); cursor: default; }
 /* one line, so its text can change without moving the buttons */
 .c-hint { margin: -6px 0 0 23px; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* the result changed while the question was open */
+.c-hint.c-warn { margin-left: 0; white-space: normal; color: var(--bad); font-weight: 600; }
 .c-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 .c-actions .btn.primary { width: auto; }
 

@@ -130,6 +130,9 @@
       inCart: (name, n) => `${name}: ${n} in your cart`,
       otherShop: (name) => `${name}: in your cart from another shop`,
       unticked: 'In your cart but not ticked, so left out at checkout. Tick them in the cart:',
+      waiting: 'CartWise: waiting for Skroutz to open your cart…',
+      notLoaded: 'CartWise could not add your order: Skroutz did not open your cart in time. Reload this page within a few minutes to try again.',
+      tooOld: 'CartWise did not add the order: it was confirmed more than 3 minutes ago, and prices may have changed since. Press “Add to Skroutz cart” in CartWise again.',
       close: 'Close',
     },
     el: {
@@ -147,6 +150,9 @@
       inCart: (name, n) => `${name}: ${n} στο καλάθι σου`,
       otherShop: (name) => `${name}: στο καλάθι σου από άλλο κατάστημα`,
       unticked: 'Στο καλάθι σου αλλά χωρίς τικ, οπότε μένουν έξω από την παραγγελία. Τσέκαρέ τα στο καλάθι:',
+      waiting: 'CartWise: περιμένω να ανοίξει το καλάθι σου στο Skroutz…',
+      notLoaded: 'Το CartWise δεν πρόσθεσε την παραγγελία σου: το Skroutz δεν άνοιξε το καλάθι σου εγκαίρως. Ανανέωσε αυτή τη σελίδα μέσα στα επόμενα λεπτά για να ξαναδοκιμάσει.',
+      tooOld: 'Το CartWise δεν πρόσθεσε την παραγγελία: επιβεβαιώθηκε πριν από πάνω από 3 λεπτά και οι τιμές μπορεί να άλλαξαν. Πάτησε ξανά «Προσθήκη στο καλάθι του Skroutz» στο CartWise.',
       close: 'Κλείσιμο',
     },
   };
@@ -289,29 +295,54 @@
     if (lines.length === 1) setTimeout(() => box.remove(), 8000);
   }
 
+  // An order confirmed in the popup runs on the cart page the popup opens
+  // (#cartwise), or on the next cart page within a few minutes: Skroutz's
+  // "checking your browser" page can lose the #cartwise on its way to the cart.
+  const JOB_FRESH = 3 * 60000;
+
+  /** Takes the order for this page, unless another cart tab has taken it already. */
+  async function claimJob(ts) {
+    const take = async () => {
+      const { cartJob } = await chrome.storage.local.get('cartJob');
+      if (!cartJob || cartJob.ts !== ts) return false;
+      await chrome.storage.local.remove('cartJob');
+      return true;
+    };
+    // cart tabs share this lock (the same site), so two of them cannot both take it
+    return navigator.locks ? navigator.locks.request('cartwise-cart-job', take) : take();
+  }
+
   async function runCartJob() {
     if (BP || location.pathname !== '/cart' || !alive()) return;
     const { text } = await read();
     const T = CART_TEXT[text === TEXT.el ? 'el' : 'en'];
+    const asked = location.hash === '#cartwise'; // the page the popup opened
+    if (asked || location.hash === DONE_HASH) history.replaceState(null, '', location.pathname + location.search);
 
-    // after the reload that follows a finished job: say what happened (once)
-    if (location.hash === DONE_HASH) {
-      history.replaceState(null, '', location.pathname + location.search);
-      const { [RESULT_KEY]: done } = await chrome.storage.local.get(RESULT_KEY);
+    // After the reload that follows a finished order: say what happened, once
+    // (also when that reload went through the browser check and lost DONE_HASH).
+    const { [RESULT_KEY]: done, cartJob } = await chrome.storage.local.get([RESULT_KEY, 'cartJob']);
+    if (done) {
       await chrome.storage.local.remove(RESULT_KEY);
-      if (done && Date.now() - done.ts < 120000) showResult(done.result, T);
+      if (Date.now() - done.ts < 120000) showResult(done.result, T);
+    }
+    if (!cartJob || !Array.isArray(cartJob.items)) return;
+    if (Date.now() - cartJob.ts > JOB_FRESH) {
+      // confirmed too long ago (prices may have changed since): not done, and said so where it was meant to run
+      await chrome.storage.local.remove('cartJob');
+      if (asked) cartBox([T.tooOld], T.close);
       return;
     }
-
-    if (location.hash !== '#cartwise') return;
-    // a "checking your browser" page has no token yet: wait a while for the real page
+    // A "checking your browser" page has no token yet: wait for the real page,
+    // saying so after a moment. If it does not come, say that too; the order
+    // stays, so reloading the page within a few minutes tries again.
     let token = null;
-    for (let i = 0; i < 30 && !(token = document.querySelector('meta[name="csrf-token"]')?.content); i++) await pause(1000);
-    if (!token) return;
-    const { cartJob } = await chrome.storage.local.get('cartJob');
-    history.replaceState(null, '', location.pathname + location.search);
-    if (!cartJob || !Array.isArray(cartJob.items) || Date.now() - cartJob.ts > 120000) return;
-    await chrome.storage.local.remove('cartJob'); // claimed: never run twice
+    for (let i = 0; i < 60 && !(token = document.querySelector('meta[name="csrf-token"]')?.content); i++) {
+      if (i === 3) cartBox([T.waiting]);
+      await pause(1000);
+    }
+    if (!token) { cartBox([T.notLoaded], T.close); return; }
+    if (!(await claimJob(cartJob.ts))) return; // never run twice
 
     const call = cartApi(token);
     const items = cartJob.items;

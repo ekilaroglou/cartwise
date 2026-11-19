@@ -1,17 +1,25 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-16 -16 128 128">
+  <!-- CartWise icon: a white cart on an emerald tile, with a "price down"
+       arrow cut out of the basket. Drawn in a 96 x 96 box; the 16-unit margin
+       around it is the transparent padding the Chrome Web Store asks for (a
+       96 px icon in a 128 px image). The PNGs in icons/ and store/ are made
+       from this file and from icon-16.svg (the 16 px toolbar size). -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ffa13c"/><stop offset="1" stop-color="#ec5f12"/>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#14C98F"/><stop offset="1" stop-color="#077A6B"/>
     </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".18"/><stop offset=".55" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="arrow">
+      <rect x="-16" y="-16" width="128" height="128" fill="#fff"/>
+      <path d="M50.5 36v15M43 44l7.5 7.5 7.5-7.5" fill="none" stroke="#000" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    </mask>
   </defs>
-  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#bg)"/>
-  <!-- cart -->
-  <g fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M20 30h12l11 46h46l9-32H39"/>
-  </g>
-  <circle cx="49" cy="94" r="8" fill="#fff"/>
-  <circle cx="84" cy="94" r="8" fill="#fff"/>
-  <!-- price-down badge -->
-  <circle cx="96" cy="34" r="22" fill="#14a35a" stroke="#fff" stroke-width="5"/>
-  <path d="M96 22v22M86 36l10 10 10-10" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect width="96" height="96" rx="22" fill="url(#tile)"/>
+  <rect width="96" height="96" rx="22" fill="url(#sheen)"/>
+  <path d="M13 22h8l3.2 12" fill="none" stroke="#fff" stroke-width="8.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M23 32h55l-7.5 27H30.5z" fill="#fff" stroke="#fff" stroke-width="6" stroke-linejoin="round" mask="url(#arrow)"/>
+  <circle cx="36" cy="72" r="6.4" fill="#fff"/>
+  <circle cx="65" cy="72" r="6.4" fill="#fff"/>
 </svg>

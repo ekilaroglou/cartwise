@@ -52,9 +52,9 @@ Upload `dist/cartwise-<version>.zip`.
 > Το CartWise είναι ανεξάρτητο έργο και δεν συνδέεται με το Skroutz ή το BestPrice.
 
 ### Graphics
-- **Store icon, 128×128:** `store/logo-128.png`.
-- **Screenshots:** at least one, 1280×800 or 640×400. These are not made yet.
-- **Small promo tile, 440×280:** not made yet. The dashboard says whether it is required for your listing.
+- **Store icon, 128×128:** `store/logo-128.png` (a 96 px icon with 16 px of transparent margin, as the store asks). The icon's source is `icon.svg` (and `icon-16.svg` for the toolbar size).
+- **Screenshots:** at least one, 1280×800 or 640×400. `store/screenshot-1-en.png` (1280×800): the real popup with the cheapest Skroutz result, beside a short description. Its popup is in English, so it suits the English listing; for the Greek listing use it too, or a Greek one made the same way from a screenshot of the popup in Greek.
+- **Small promo tile, 440×280:** `store/promo-440x280.png`. The dashboard says whether it is required for your listing.
 
 ### Privacy practices tab
 - **Single purpose:**
@@ -105,5 +105,5 @@ Paste this into the notes field:
 ---
 
 ## Risks to know about
-- **The name uses another company's brand.** "CartWise for Skroutz" names Skroutz to say what the extension works with, which both stores generally accept, and the icon is not Skroutz's. If a store or Skroutz objects, the fix is a rename such as "CartWise – price optimizer for Skroutz".
+- **The name uses another company's brand.** "CartWise for Skroutz" names Skroutz to say what the extension works with, which both stores generally accept, and the icon is not Skroutz's (it is green, not Skroutz's orange). If a store or Skroutz objects, the fix is a rename such as "CartWise – price optimizer for Skroutz".
 - **The extension depends on the sites' own pages and requests.** If Skroutz or BestPrice change them, parts can stop working until updated. They could also object to automated reading of their pages. Neither store checks this, but it can lead to a takedown request.

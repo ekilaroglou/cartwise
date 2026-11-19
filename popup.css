@@ -4,9 +4,17 @@
   --text: #1c1d22;
   --muted: #6b6f7b;
   --line: #e4e5ea;
-  --accent: #f68b24;
-  --accent-strong: #e07610;
-  --accent-soft: #fff1e2;
+  /* CartWise green (the icon): buttons, the open tab, switches, links */
+  --accent: #08785e;
+  --accent-hover: #066150;
+  --accent-text: #08785e;
+  --accent-soft: #e3f5ee;
+  /* warnings (amber), also the Skroutz badge (Skroutz's own orange) */
+  --warn-text: #b45309;
+  --warn-soft: #fff1e2;
+  /* the BestPrice badge */
+  --bp-text: #6d28d9;
+  --bp-soft: #f1eafe;
   --good: #14804a;
   --good-soft: #e3f6ec;
   --bad: #c0392b;
@@ -21,7 +29,12 @@
     --text: #eceef3;
     --muted: #9a9fad;
     --line: #33363f;
-    --accent-soft: #3a2a17;
+    --accent-text: #4fd1a5;
+    --accent-soft: #133a30;
+    --warn-text: #f5a35b;
+    --warn-soft: #3a2a17;
+    --bp-text: #c4b5fd;
+    --bp-soft: #2e2350;
     --good: #4cc98a;
     --good-soft: #17352a;
     --bad: #ff7b6b;
@@ -58,7 +71,7 @@ section { margin-top: 12px; }
   border: 1px solid var(--line); border-radius: 50%; background: var(--card);
   color: var(--muted); cursor: pointer;
 }
-.icon-btn:hover { color: var(--accent-strong); border-color: var(--accent); }
+.icon-btn:hover { color: var(--accent-text); border-color: var(--accent); }
 .icon-btn.spin svg { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -88,7 +101,7 @@ section { margin-top: 12px; }
 }
 .btn:hover { border-color: var(--accent); }
 .btn.primary { width: 100%; background: var(--accent); border-color: var(--accent); color: #fff; margin-bottom: 8px; overflow: hidden; text-overflow: ellipsis; }
-.btn.primary:hover { background: var(--accent-strong); }
+.btn.primary:hover { background: var(--accent-hover); }
 .btn.primary:disabled { background: var(--good-soft); border-color: transparent; color: var(--good); cursor: default; }
 #add-form { display: flex; gap: 6px; }
 #url {
@@ -115,10 +128,13 @@ h2 { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap:
 .thumb-img.blank { display: grid; place-items: center; color: var(--muted); font-size: 18px; background: var(--bg); }
 .p-main { min-width: 0; }
 .p-name { display: block; font-weight: 600; color: inherit; text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.p-name:hover { color: var(--accent-strong); }
+.p-name:hover { color: var(--accent-text); }
 .p-meta { color: var(--muted); font-size: 12px; }
 .p-meta.err { color: var(--bad); }
-.p-meta .retry { border: 0; background: none; color: var(--accent-strong); cursor: pointer; padding: 0; font-weight: 600; }
+.p-meta .retry { border: 0; background: none; color: var(--accent-text); cursor: pointer; padding: 0; font-weight: 600; }
+/* a product whose match needs the user's answer: may take two lines */
+.p-review { font-size: 12px; line-height: 1.35; }
+.p-review .retry { border: 0; background: none; color: var(--accent-text); cursor: pointer; padding: 0; font: inherit; font-weight: 700; }
 .p-side { display: flex; align-items: center; gap: 6px; }
 .qty { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .qty button { width: 22px; height: 24px; border: 0; background: none; cursor: pointer; color: var(--muted); font-weight: 700; }
@@ -145,7 +161,7 @@ h2 { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap:
 .badge { display: inline-block; padding: 1px 7px; border-radius: 20px; font-size: 11px; font-weight: 700; white-space: nowrap; }
 .badge.save { background: var(--good-soft); color: var(--good); }
 .badge.hub { background: var(--hub-soft); color: var(--hub); }
-.badge.win { background: var(--accent-soft); color: var(--accent-strong); }
+.badge.win { background: var(--accent-soft); color: var(--accent-text); }
 .r-note { padding: 0 12px 10px; color: var(--muted); font-size: 12px; }
 
 .shipment { border-top: 1px solid var(--line); padding: 8px 12px; }
@@ -153,7 +169,7 @@ h2 { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap:
 .row { display: flex; justify-content: space-between; gap: 10px; padding: 1px 0; }
 .row .n { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 a.n { color: inherit; text-decoration: none; }
-a.n:hover { color: var(--accent-strong); }
+a.n:hover { color: var(--accent-text); }
 .row .n em { color: var(--muted); font-style: normal; }
 .row .v { flex: none; font-variant-numeric: tabular-nums; }
 .row.ship { color: var(--muted); }
@@ -169,7 +185,7 @@ a.n:hover { color: var(--accent-strong); }
 .assumptions li { margin: 2px 0; }
 
 /* BestPrice */
-.badge.warn { background: var(--accent-soft); color: var(--accent-strong); }
+.badge.warn { background: var(--warn-soft); color: var(--warn-text); }
 .badge.bad { background: transparent; color: var(--bad); border: 1px solid var(--bad); }
 .matches { border-top: 1px solid var(--line); padding: 8px 12px; }
 .matches summary { cursor: pointer; color: var(--muted); font-size: 12px; }
@@ -179,14 +195,14 @@ a.n:hover { color: var(--accent-strong); }
 .m-src .badge, .m-src .dots { flex: none; }
 .m-pick { display: flex; align-items: center; gap: 6px; margin-top: 3px; }
 .m-pick select, .m-pick input { flex: 1; min-width: 0; padding: 4px 6px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); }
-.m-pick a { flex: none; color: var(--accent-strong); text-decoration: none; font-size: 12px; font-weight: 600; }
+.m-pick a { flex: none; color: var(--accent-text); text-decoration: none; font-size: 12px; font-weight: 600; }
 .m-pick a:hover { text-decoration: underline; }
-.badge.bp { background: var(--good-soft); color: var(--good); }
-.badge.sk { background: var(--accent-soft); color: var(--accent-strong); }
+.badge.bp { background: var(--bp-soft); color: var(--bp-text); }
+.badge.sk { background: var(--warn-soft); color: var(--warn-text); }
 
 /* settings panel */
 .top .icon-btn + .icon-btn { margin-left: -4px; }
-.icon-btn[aria-expanded="true"] { color: var(--accent-strong); border-color: var(--accent); background: var(--accent-soft); }
+.icon-btn[aria-expanded="true"] { color: var(--accent-text); border-color: var(--accent); background: var(--accent-soft); }
 .set-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .settings .assumptions { padding-top: 8px; border-top: 1px solid var(--line); }
 .hint { color: var(--muted); font-size: 12px; text-align: center; padding: 4px 8px; }
@@ -204,15 +220,15 @@ a.n:hover { color: var(--accent-strong); }
 .tab:hover { border-color: var(--accent); }
 .tab span { font-size: 11px; font-weight: 700; white-space: nowrap; }
 .tab b { font-size: 13px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.tab[aria-expanded="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; background: var(--accent-soft); color: var(--accent-strong); }
+.tab[aria-expanded="true"] { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; background: var(--accent-soft); color: var(--accent-text); }
 .tab.cheapest b { color: var(--good); }
 .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* matches */
 .m-to { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
 .m-to a { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: inherit; text-decoration: none; font-weight: 600; }
-.m-to a:hover { color: var(--accent-strong); }
-.link-btn { flex: none; border: 0; background: none; padding: 0; color: var(--accent-strong); font-size: 12px; font-weight: 600; cursor: pointer; }
+.m-to a:hover { color: var(--accent-text); }
+.link-btn { flex: none; border: 0; background: none; padding: 0; color: var(--accent-text); font-size: 12px; font-weight: 600; cursor: pointer; }
 .link-btn:hover { text-decoration: underline; }
 .p-pick { margin-top: 3px; }
 .p-pick select { width: 100%; padding: 3px 6px; border: 1px solid var(--line); border-radius: 7px; background: var(--card); }
@@ -256,7 +272,7 @@ select option, select optgroup { background: var(--card); color: var(--text); }
 
 /* product list as a drop-down */
 .fold { display: flex; align-items: center; gap: 6px; padding: 2px 4px 2px 0; border: 0; background: none; font: inherit; font-weight: 700; cursor: pointer; border-radius: 6px; }
-.fold:hover:not(:disabled) { color: var(--accent-strong); }
+.fold:hover:not(:disabled) { color: var(--accent-text); }
 .fold:disabled { cursor: default; }
 .fold:disabled .chev { display: none; }
 .fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -309,8 +325,9 @@ dialog.confirm h3 { font-size: 15px; font-weight: 700; }
 .c-check input:disabled, .c-check input:disabled + span { color: var(--muted); cursor: default; }
 /* one line, so its text can change without moving the buttons */
 .c-hint { margin: -6px 0 0 23px; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* the result changed while the question was open */
-.c-hint.c-warn { margin-left: 0; white-space: normal; color: var(--bad); font-weight: 600; }
+/* the check before sending, and what it found (the result changed while the question was open) */
+.c-msg { color: var(--muted); font-size: 12px; }
+.c-msg.c-warn, .c-note.c-warn { color: var(--bad); font-weight: 600; }
 .c-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 .c-actions .btn.primary { width: auto; }
 

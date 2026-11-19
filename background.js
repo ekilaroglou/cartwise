@@ -110,8 +110,9 @@ async function lookOne(p) {
   if (!res || res.error) throw new Error((res && res.error) || 'no answer');
 
   // save the prices and the match (never the list itself), unless the product
-  // was removed meanwhile or the popup already did it
-  await serial(async () => {
+  // was removed meanwhile or the popup already did it; under the lock the popup's
+  // saves take too, so neither overwrites the other's (see saveMap in popup.js)
+  await withLock(async () => {
     const cur = await chrome.storage.local.get(['cart', 'offers', 'bp']);
     if (!(cur.cart || []).some((x) => x.id === p.id)) return;
     const set = {};

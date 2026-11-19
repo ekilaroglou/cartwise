@@ -18,7 +18,7 @@ const state = {
   openTab: null,                              // result tab whose details are open (none when the popup opens)
   offers: {},                                 // id -> {ts, name, offers, titles}
   status: {},                                 // id -> 'loading' | 'error'
-  bp: {},                                     // Skroutz id -> {v, item, candidates, confident, manual, searched, offers, offersTs}
+  bp: {},                                     // Skroutz id -> {v, item, candidates, confident, manual, auto, searched, offers, offersTs}
   bpStatus: {},                               // Skroutz id -> 'loading' | 'error'
   bpEdit: null,                               // Skroutz id whose BestPrice match is being changed
   bpPaste: null,                              // Skroutz id whose "paste a BestPrice link" box is open
@@ -28,6 +28,7 @@ const state = {
   calcCache: {},                              // tab -> {key, result}: the last results, also for the next opening
   open: {},                                   // <details> key -> open, as the user left it
   bgLookups: {},                              // id -> start time, while the background looks the product up
+  restored: [],                               // names of products the upgrade put back in the list (see load)
 };
 
 const $ = (id) => document.getElementById(id);
@@ -65,20 +66,43 @@ async function load() {
   state.history = Array.isArray(data.history) ? data.history : [];
   state.cart = Array.isArray(data.cart) ? data.cart : [];
   synced = { rev: data.cartRev || 0, cart: copy(state.cart) };
+  syncedMaps.offers = copy(data.offers || {});
+  syncedMaps.bp = copy(data.bp || {});
   // the products' names, also of those Undo can bring back (for checking old matches)
   const names = {};
   for (const list of [state.cart, ...[...state.history].reverse()]) for (const p of list) names[p.id] ??= p.name;
   state.bp = {};
+  const back = new Map(); // product id -> the BestPrice product to put back in its place
   let older = false;
   for (const [id, rec] of Object.entries(data.bp || {})) {
     if (!rec) continue;
     if (rec.v === BP_VER) { state.bp[id] = rec; continue; }
     older = true;
-    if (rec.v >= 3 && rec.v < BP_VER) {
-      const kept = oldMatch(id, rec, names[id]);
-      if (kept) state.bp[id] = kept;
-    }
+    if (!(rec.v >= 3 && rec.v < BP_VER)) continue;
+    const r = oldMatch(id, rec, names[id]);
+    if (r.rec) state.bp[id] = r.rec;
+    if (r.back) back.set(id, r.back);
   }
+  // A Skroutz product that may have replaced one added from BestPrice, which
+  // today's rules call a different model. When the list knows the replacement
+  // was automatic (`origin`, kept since 1.13.3), the BestPrice product simply
+  // comes back, to be matched again (Undo brings the other back). Lists saved
+  // earlier cannot tell an automatic replacement from a product the user added
+  // or picked: then the product's line asks the user, and it is not sent to
+  // the Skroutz cart until they answer.
+  state.restored = [];
+  const placed = new Set(state.cart.map((p) => p.id));
+  let asked = false;
+  const list = state.cart.map((p) => {
+    const b = back.get(p.id);
+    if (!b || placed.has('bp' + b.id)) return p;
+    if (!(p.origin && p.origin.auto)) { asked = true; return { ...p, review: b }; }
+    placed.add('bp' + b.id);
+    state.restored.push(b.name);
+    return bpPlaceholder(b, p);
+  });
+  if (state.restored.length) remember();
+  if (state.restored.length || asked) { state.cart = list; saveCart(); }
   // saved at once, so the page button on bestprice.gr and the background see the same
   if (older) saveBp();
   // "buy from a specific shop" was removed: forget choices saved by that version
@@ -94,28 +118,83 @@ async function load() {
 }
 
 /**
- * A BestPrice record saved by an older version, whose matching was looser:
- * what is kept of it, or null to look for the match again with today's rules.
- * `skName`: the name of the product it belongs to.
+ * A BestPrice record saved by an older version, whose matching was looser.
+ * Returns {rec, back}: what is kept of the record (null: the match is looked
+ * for again with today's rules), and the BestPrice product to put back in the
+ * list in place of this product (null: none). `skName`: this product's name.
  */
 function oldMatch(id, rec, skName) {
+  const named = !!skName && !/^Product \d+$/.test(skName);
+  // Saved by 1.13.2, which already found its matches with today's rules. Its
+  // upgrade asked about old pairs again ("not sure", the old match as the only
+  // choice), but did not deal with the Skroutz product that an older version
+  // may have put in place of one added from BestPrice: that is done now.
+  if (rec.v === 6) {
+    const was = !rec.item && rec.offers === null && rec.candidates && rec.candidates.length === 1 ? rec.candidates[0] : null;
+    return { rec: { ...rec, v: BP_VER }, back: was && named ? was : null };
+  }
   // found automatically: looked for again
-  if (!rec.manual || !rec.item) return null;
+  if (!rec.manual || !rec.item) return { rec: null, back: null };
   // version 3 prices lack stock and links, so they are read again
   const kept = { ...rec, v: BP_VER, ...(rec.v < 4 ? { offers: null, offersTs: 0 } : {}) };
   // a product added from BestPrice: the record is that product itself
-  if (id.startsWith('bp')) return kept;
-  // Chosen by the user, or the Skroutz product found for one added from
-  // BestPrice: older versions chose that one automatically too, and saved it
-  // the same way. When today's rules say the two are different products, the
-  // user is asked again, with this match as the one to choose.
+  if (id.startsWith('bp')) return { rec: kept, back: null };
   const bpName = rec.item.name || '';
-  if (!bpName || !skName || /^Product \d+$/.test(skName)) return kept;
-  const fromBp = !(rec.candidates && rec.candidates.length); // not picked from a list of BestPrice candidates
+  if (!bpName || !named) return { rec: kept, back: null };
+  // Not picked from a list of BestPrice candidates: the Skroutz product that an
+  // older version found for one added from BestPrice (by itself, or picked by
+  // the user), saved the same way as a match the user chose.
+  const fromBp = !(rec.candidates && rec.candidates.length);
   if (conflict(skName, bpName) || (fromBp && !sameModel(skName, bpName))) {
-    return { v: BP_VER, item: null, confident: false, searched: true, candidates: [{ id: rec.item.id, url: rec.item.url, name: bpName }], offers: null, offersTs: 0 };
+    // Today's rules call them different products: the match is asked again
+    // ("not sure", the old one as the choice). Its BestPrice prices are kept,
+    // so a BestPrice product that comes back is priced at once (see load).
+    const was = { id: rec.item.id, url: rec.item.url, name: bpName };
+    const prices = rec.v >= 4 && rec.offers ? { wasOffers: rec.offers, wasOffersTs: rec.offersTs || 0 } : {};
+    return { rec: { v: BP_VER, item: null, confident: false, searched: true, candidates: [was], offers: null, offersTs: 0, ...prices }, back: fromBp ? was : null };
   }
-  return kept;
+  return { rec: kept, back: null };
+}
+
+/**
+ * The list entry for a product added from BestPrice ({id, url, name}) that
+ * comes back in place of `p` (same quantity), to be matched with Skroutz again.
+ * Until then it is priced from BestPrice, with the prices kept for it if any.
+ */
+function bpPlaceholder(b, p) {
+  const phId = 'bp' + b.id;
+  const old = state.bp[p.id] || {};
+  if (!state.bp[phId]) {
+    state.bp[phId] = {
+      v: BP_VER, item: { id: b.id, url: b.url, name: b.name }, candidates: [], searched: true, confident: true, manual: true,
+      offers: old.wasOffers || null, offersTs: old.wasOffersTs || 0,
+    };
+  }
+  return { id: phId, name: b.name, bpItem: { id: b.id, url: b.url, name: b.name }, image: null, qty: p.qty || 1 };
+}
+
+/** "Keep this": the product stays; the user has checked it. */
+function keepReviewed(id) {
+  const p = state.cart.find((x) => x.id === id);
+  if (!p || !p.review) return;
+  remember();
+  delete p.review;
+  saveCart();
+  render();
+}
+
+/** "Use the BestPrice one": the product added from BestPrice comes back in its place. */
+function restoreReviewed(id) {
+  const i = state.cart.findIndex((x) => x.id === id);
+  if (i < 0 || !state.cart[i].review) return;
+  const b = state.cart[i].review;
+  remember();
+  if (state.cart.some((x) => x.id === 'bp' + b.id)) state.cart.splice(i, 1); // already in the list
+  else state.cart[i] = bpPlaceholder(b, state.cart[i]);
+  saveCart();
+  saveBp();
+  render();
+  resolvePh('bp' + b.id); // matched with Skroutz again, with today's rules
 }
 
 /**
@@ -202,17 +281,49 @@ function remember() {
   });
 }
 const saveSettings = () => chrome.storage.local.set({ settings: state.settings });
+// Prices (`offers`) and BestPrice matches (`bp`) are saved by this window and
+// by the background (for a product added from a page). Both take the list's
+// lock and merge, product by product: what this window changed since it last
+// read or saved them goes in, and what changed elsewhere stays. When both
+// changed the same product, the newer prices win (and a match the user chose).
+const syncedMaps = { offers: {}, bp: {} }; // as stored when this window last read or saved them
+const newer = {
+  offers: (m, t) => ((t.ts || 0) > (m.ts || 0) ? t : m),
+  bp: (m, t) => (m.manual ? m : t.manual ? t : (t.offersTs || 0) > (m.offersTs || 0) ? t : m),
+};
+/** `keep(stored)`: the products whose entries stay (those in the list, here or as stored). */
+function saveMap(key, mine, keep) {
+  return withLock(async () => {
+    const stored = await chrome.storage.local.get([key, 'cart', 'history']);
+    const theirs = stored[key] && typeof stored[key] === 'object' ? stored[key] : {};
+    const base = syncedMaps[key];
+    const out = {};
+    for (const id of new Set([...Object.keys(mine), ...Object.keys(theirs)])) {
+      const m = mine[id], t = theirs[id];
+      // an entry this window does not have is not taken out by it (a product
+      // leaves with the list; see `keep`)
+      const v = m === undefined || canon(m) === canon(base[id]) ? t // not changed here
+        : t === undefined || canon(t) === canon(base[id]) ? m      // changed here only
+        : newer[key](m, t);                                         // changed on both sides
+      if (v !== undefined) out[id] = v;
+    }
+    const ids = keep(stored);
+    for (const id of Object.keys(out)) if (!ids.has(id)) delete out[id];
+    syncedMaps[key] = copy(out); // before the save: its report must find it
+    await chrome.storage.local.set({ [key]: out });
+  });
+}
+const idsOf = (lists) => new Set(lists.flat().map((p) => p.id));
 function saveOffers() {
-  const ids = new Set(state.cart.map((p) => p.id));
+  const ids = idsOf([state.cart]);
   for (const id of Object.keys(state.offers)) if (!ids.has(id)) delete state.offers[id];
-  return chrome.storage.local.set({ offers: state.offers });
+  return saveMap('offers', state.offers, (stored) => idsOf([state.cart, stored.cart || []]));
 }
 function saveBp() {
   // keep matches for products that Undo could still bring back
-  const keep = new Set(state.cart.map((p) => p.id));
-  for (const past of state.history) for (const p of past) keep.add(p.id);
+  const keep = idsOf([state.cart, ...state.history]);
   for (const id of Object.keys(state.bp)) if (!keep.has(id)) delete state.bp[id];
-  return chrome.storage.local.set({ bp: state.bp });
+  return saveMap('bp', state.bp, (stored) => idsOf([state.cart, ...state.history, stored.cart || [], ...(stored.history || [])]));
 }
 
 // ---------- Skroutz ----------
@@ -432,7 +543,7 @@ async function resolvePh(phId) {
         const ev = evidence({ name: meta.name, mpn: meta.mpn, titles: sl.titles }, { name: bpName, titles: page.titles });
         if (ev.strong) {
           state.offers[c.id] = { v: OFFERS_VER, ts: Date.now(), name: sl.name, offers: sl.offers, titles: sl.titles };
-          adopt(phId, cand, page, true);
+          adopt(phId, cand, page, true, open);
           adopted = true;
           break;
         }
@@ -444,7 +555,7 @@ async function resolvePh(phId) {
       open.sort((a, b) => b.base - a.base);
       const [top, next] = open;
       // on the names alone only when they are clearly the same model (not Galaxy A55 for A56)
-      if (top && top.base >= 0.75 && (!next || top.base - next.base >= 0.15) && sameModel(bpName, top.name)) adopt(phId, top, page, true);
+      if (top && top.base >= 0.75 && (!next || top.base - next.base >= 0.15) && sameModel(bpName, top.name)) adopt(phId, top, page, true, open);
       else {
         const live = state.cart.find((p) => p.id === phId);
         if (live) { live.skCands = open; live.searched = true; saveCart(); }
@@ -460,12 +571,23 @@ async function resolvePh(phId) {
 
 /**
  * Replace a BestPrice placeholder with the Skroutz product it corresponds to.
- * `auto`: that Skroutz product was found automatically, not picked by the user.
+ * `auto`: that Skroutz product was found automatically, not picked by the
+ * user; `others`: the other Skroutz products the search found.
  */
-function adopt(phId, cand, page, auto = false) {
+function adopt(phId, cand, page, auto = false, others = []) {
   const i = state.cart.findIndex((p) => p.id === phId);
   if (i < 0) return;
   const ph = state.cart[i];
+  if (auto) {
+    // The swap is a change to the list that Undo can take back. Undo brings the
+    // BestPrice product back with the Skroutz products found as a list to choose
+    // from (it is not swapped by itself again).
+    const seen = new Set();
+    ph.skCands = [cand, ...others].filter((c) => !seen.has(c.id) && seen.add(c.id))
+      .map(({ id, url, name, image, mpn, brand, base }) => ({ id, url, name, image, mpn, brand, base }));
+    ph.searched = true;
+    remember();
+  }
   // The BestPrice product is the user's own (manual: never replaced by a lookup);
   // `auto` records that the Skroutz side was not, so later rules can check it again.
   state.bp[cand.id] = {
@@ -474,7 +596,14 @@ function adopt(phId, cand, page, auto = false) {
     offers: page ? page.offers : null, offersTs: page ? Date.now() : 0,
   };
   if (state.cart.some((p) => p.id === cand.id)) state.cart.splice(i, 1);
-  else state.cart[i] = { id: cand.id, url: cand.url, name: cand.name, image: cand.image || null, mpn: cand.mpn, brand: cand.brand, qty: ph.qty || 1 };
+  else {
+    state.cart[i] = {
+      id: cand.id, url: cand.url, name: cand.name, image: cand.image || null, mpn: cand.mpn, brand: cand.brand, qty: ph.qty || 1,
+      // what the user added, and whether this product was found for it automatically
+      // or picked by the user: a later version with other rules can then put it back
+      origin: { site: 'bestprice', id: ph.bpItem.id, url: ph.bpItem.url, name: ph.bpItem.name || ph.name, auto: !!auto },
+    };
+  }
   // the placeholder's BestPrice record stays while Undo can bring it back (saveBp tidies it up after)
   delete state.phStatus[phId];
   saveCart();
@@ -759,8 +888,19 @@ function placeholderMeta(item) {
       cands.map((c) => h('option', { value: c.id }, c.name))));
 }
 
+/** A product that may have replaced one added from BestPrice (see load): the user decides. */
+function reviewMeta(item) {
+  const r = item.review;
+  const name = r.name.length > 44 ? r.name.slice(0, 42) + '…' : r.name;
+  return h('div', { class: 'p-review', title: r.name },
+    h('span', { class: 'p-stale' }, t('reviewMatch', { name })), ' ',
+    h('button', { class: 'retry', onclick: () => keepReviewed(item.id) }, t('keepThis')), ' · ',
+    h('button', { class: 'retry', onclick: () => restoreReviewed(item.id) }, t('useBpOne')));
+}
+
 function productMeta(item) {
   if (isPh(item)) return placeholderMeta(item);
+  if (item.review) return reviewMeta(item);
   const data = state.offers[item.id];
   const status = state.status[item.id];
   if (!data && (status === 'loading' || (!status && bgBusy(item.id)))) return h('div', { class: 'p-meta dots' }, t('checking'));
@@ -776,12 +916,16 @@ function productMeta(item) {
   const min = Math.min(...data.offers.map((o) => o.price));
   const shops = new Set(data.offers.map((o) => o.shopId)).size;
   const hub = data.offers.some((o) => o.hub);
-  // no store sells this many: say so first, with a one-click way down to what one store has
+  // No store sells this many: say so first, with a one-click way down to the
+  // most one store has. Counted among the stores the results use (those that
+  // fit the availability settings), so the number is the one the results give.
   const qty = item.qty || 1;
-  const most = mostOf(data.offers);
+  const fit = data.offers.filter(passes);
+  const most = fit.length ? mostOf(fit) : Infinity;
   const short = qty > most && [h('span', { class: 'p-stale' }, t('mostPerStore', { n: most })), ' ',
     h('button', { class: 'retry', onclick: () => qtyTo(item.id, most) }, t('setQtyTo', { n: most })), ' · '];
-  return h('div', { class: 'p-meta', title: short ? t('mostPerStoreTip', { n: most }) : null }, stale, short,
+  const tip = fit.length < data.offers.length ? 'mostPerStoreTipFit' : 'mostPerStoreTip';
+  return h('div', { class: 'p-meta', title: short ? t(tip, { n: most }) : null }, stale, short,
     t('fromStores', { price: eur(min), stores: count(shops, 'store') }),
     hub && ' · ', hub && h('span', { class: 'badge hub' }, 'Hub'));
 }
@@ -890,53 +1034,93 @@ function readSkCart() {
 
 /**
  * "Add to your Skroutz cart?" with the choice to empty the rest of that cart.
- * `from`: where the result comes from (see cartButton); it is checked again
- * before anything is sent.
+ * `from`, `key`: where the result comes from and what it is (see shownSol and
+ * orderKey). Before anything is sent, the result is worked out again for the
+ * list as it is then; if it changed, the question shows the new order instead,
+ * which the user confirms in turn.
  */
-function confirmCart(items, sol, from) {
+function confirmCart(items, sol, from, key) {
   if (document.querySelector('dialog.confirm')) return; // already asking
-  const sk = sol.shipments.filter((s) => !s.key.startsWith('sbp'));
-  const onBp = sol.shipments.filter((s) => s.key.startsWith('sbp')).reduce((n, s) => n + s.items.length, 0);
-  const stores = new Set(sk.flatMap((s) => s.shops)).size;
-  const amount = sk.reduce((sum, s) => sum + s.subtotal + s.fee, 0);
-  const skus = new Set(items.map((i) => i.sku));
-  const choice = items.filter((i) => i.choice).length;
+  let order = { items, sol, key }; // what the question is about now
 
+  const what = h('p', {});
+  const notes = h('div', {});
   const empty = h('input', { type: 'checkbox' });
-  // one line whose text changes in place once the cart has been read
+  // what else is in the Skroutz cart: changes in place once that cart has been read
   const hint = h('p', { class: 'c-hint' }, t('checkingSkCart'));
+  // the check before sending, and what it found
+  const msg = h('p', { class: 'c-msg', hidden: true });
   const ok = h('button', { class: 'btn primary', type: 'submit', value: 'ok' }, t('confirmAdd'));
   empty.addEventListener('change', () => { ok.textContent = t(empty.checked ? 'confirmEmptyAdd' : 'confirmAdd'); });
+  let skLines = null; // the Skroutz cart, once read
+  const showOthers = () => {
+    if (!skLines) return;
+    // a product of this order that is already there is updated, not counted as "other"
+    const skus = new Set(order.items.map((i) => i.sku));
+    const others = skLines.filter((l) => !skus.has(l.sku)).length;
+    // Seeing nothing else proves little: some browsers send this read without the
+    // Skroutz login, and get an empty guest cart. So the choice always stays, and
+    // the cart page (which has the login) does the emptying.
+    hint.textContent = others ? t('othersInSkCart', { n: others }) : t('emptyRestHint');
+  };
+  const draw = () => {
+    const { items: list, sol: s } = order;
+    const sk = s.shipments.filter((x) => !x.key.startsWith('sbp'));
+    const onBp = s.shipments.filter((x) => x.key.startsWith('sbp')).reduce((n, x) => n + x.items.length, 0);
+    // What goes into the cart: not the products whose shop asks for a size or
+    // option first (added from their pages). Their shipments' shipping counts
+    // once one of the products added is in them.
+    const adding = list.filter((i) => !i.choice);
+    const goes = (it) => adding.some((i) => i.sku === String(it.productId) && i.card === String(it.cardId));
+    const parts = sk.map((x) => ({ x, its: x.items.filter(goes) })).filter((p) => p.its.length);
+    const stores = new Set(parts.flatMap((p) => p.its.map((it) => it.shopName))).size;
+    const amount = parts.reduce((sum, p) => sum + p.x.fee + p.its.reduce((a, it) => a + it.price, 0), 0);
+    const choice = list.length - adding.length;
+    // a product the user still has to check in the list (see reviewMeta) is not sent
+    const review = list.filter((i) => state.cart.some((p) => p.id === i.sku && p.review));
+    what.textContent = t('confirmWhat', { products: count(adding.length, 'product'), stores: count(stores, 'store'), amount: eur(amount) });
+    notes.replaceChildren(...[
+      onBp > 0 && h('p', { class: 'c-note' }, t('confirmBpNote', { n: onBp })),
+      choice > 0 && h('p', { class: 'c-note' }, t('confirmChoiceNote', { n: choice })),
+      review.length > 0 && h('p', { class: 'c-note c-warn' }, t('reviewFirst', { names: review.map((i) => i.name).join(', ') })),
+    ].filter(Boolean));
+    ok.disabled = !adding.length || review.length > 0;
+    showOthers();
+  };
   const form = h('form', { method: 'dialog' },
     h('h3', { id: 'c-title' }, t('confirmTitle')),
-    h('p', {}, t('confirmWhat', { products: count(items.length, 'product'), stores: count(stores, 'store'), amount: eur(amount) })),
-    onBp > 0 && h('p', { class: 'c-note' }, t('confirmBpNote', { n: onBp })),
-    choice > 0 && h('p', { class: 'c-note' }, t('confirmChoiceNote', { n: choice })),
+    what, notes,
     h('label', { class: 'c-check' }, empty, h('span', {}, t('emptyRest'))),
-    hint,
+    hint, msg,
     h('div', { class: 'c-actions' },
       h('button', { class: 'btn', type: 'submit', value: 'cancel' }, t('cancel')),
       ok));
+  draw();
   const dlg = h('dialog', { class: 'confirm', 'aria-labelledby': 'c-title' }, form);
   dlg.returnValue = '';
   // Before sending: the list, its prices or the settings may have changed while
   // the question was open (a product added from a page, prices read again). The
-  // order goes only if the result for the list as it is now is this same one.
+  // order goes only if the result for the list as it is now is the one shown.
   form.addEventListener('submit', (e) => {
     if (!e.submitter || e.submitter.value !== 'ok') return; // Cancel closes as usual
     e.preventDefault();
     ok.disabled = true;
-    hint.classList.remove('c-warn');
-    hint.textContent = t('checkingResult');
-    stillShown(from, items).then((same) => {
+    msg.hidden = false;
+    msg.classList.remove('c-warn');
+    msg.textContent = t('checkingResult');
+    latestSol(from).then((now) => {
       if (!dlg.isConnected) return;
-      if (same) { dlg.close('ok'); return; }
-      hint.classList.add('c-warn');
-      hint.textContent = t('resultChanged');
+      if (now && orderKey(now) === order.key) { dlg.close('ok'); return; }
+      msg.classList.add('c-warn');
+      if (!now) { msg.textContent = t('noResultNow'); return; }
+      // changed: the question now shows the new order, which the user confirms in turn
+      order = { items: skroutzItems(now), sol: now, key: orderKey(now) };
+      draw();
+      msg.textContent = order.items.length ? t('resultChanged') : t('nothingToAddNow');
     });
   });
   dlg.addEventListener('close', () => {
-    if (dlg.returnValue === 'ok') sendToSkroutzCart(items, empty.checked);
+    if (dlg.returnValue === 'ok') sendToSkroutzCart(order.items, empty.checked);
     dlg.remove();
   });
   // a click on the dimmed page around it cancels
@@ -944,16 +1128,11 @@ function confirmCart(items, sol, from) {
   document.body.append(dlg); // outside #app: not part of the saved copy of the window
   dlg.showModal();
   ok.focus();
-  // (the line is left alone once it says that the result is being checked)
   readSkCart().then((lines) => {
-    if (!dlg.isConnected || ok.disabled) return;
-    // a product of this order that is already there is updated, not counted as "other"
-    const others = lines.filter((l) => !skus.has(l.sku)).length;
-    // Seeing nothing else proves little: some browsers send this read without the
-    // Skroutz login, and get an empty guest cart. So the choice always stays, and
-    // the cart page (which has the login) does the emptying.
-    hint.textContent = others ? t('othersInSkCart', { n: others }) : t('emptyRestHint');
-  }, () => { if (dlg.isConnected && !ok.disabled) hint.textContent = t('emptyRestHint'); });
+    if (!dlg.isConnected) return;
+    skLines = lines;
+    showOthers();
+  }, () => { if (dlg.isConnected) hint.textContent = t('emptyRestHint'); });
 }
 
 // ---------- is a result still the one for the list as it is now? ----------
@@ -974,22 +1153,35 @@ function shownSol(from) {
   if (tab.res.error) return null;
   return from.pick(tab.res, c) || null;
 }
-/** The same offers in the same quantities. */
-const orderKey = (items) => items.map((i) => [i.sku, i.card, i.qty, i.choice ? 1 : 0].join(':')).sort().join('|');
-/** Waits (a few seconds at most) for a calculation in progress, then compares. */
-async function stillShown(from, items) {
+/**
+ * A whole result as one string, money in whole cents: every product with its
+ * quantity, shop, offer and price, every shipment's shipping (BestPrice ones
+ * included), and the total. Two results with the same key are the same order
+ * at the same amounts.
+ */
+function orderKey(sol) {
+  const c = (eur) => Math.round(eur * 100);
+  const shipments = sol.shipments.map((s) => [
+    `${s.key} ship ${c(s.fee)}`,
+    ...s.items.map((it) => [it.productId, it.shopId, it.cardId || '', it.qty || 1, it.choice ? 1 : 0, c(it.price)].join(':')).sort(),
+  ].join(' '));
+  return `${shipments.sort().join(' | ')} = ${c(sol.total)}`;
+}
+/** The result as it is now, after waiting (a few seconds at most) for a calculation in progress. */
+async function latestSol(from) {
   for (let i = 0; i < 40; i++) {
     const now = shownSol(from);
-    if (now !== BUSY) return !!now && orderKey(skroutzItems(now)) === orderKey(items);
+    if (now !== BUSY) return now;
     await new Promise((r) => setTimeout(r, 150));
   }
-  return false;
+  return null;
 }
 
 function cartButton(sol, from) {
   const items = skroutzItems(sol);
   if (!items.length) return null;
   const mixed = sol.shipments.some((s) => s.key.startsWith('sbp'));
+  const key = orderKey(sol);
   return h('div', { class: 'r-actions' },
     h('button', {
       class: 'btn primary', type: 'button',
@@ -997,8 +1189,8 @@ function cartButton(sol, from) {
       onclick: () => {
         const now = shownSol(from);
         if (now === BUSY) return;
-        if (!now || orderKey(skroutzItems(now)) !== orderKey(items)) { renderResults(); return; }
-        confirmCart(items, sol, from);
+        if (!now || orderKey(now) !== key) { renderResults(); return; }
+        confirmCart(items, sol, from, key);
       },
       // start reading the Skroutz cart as the pointer arrives, so the question is complete when it opens
       onpointerenter: () => { readSkCart().catch(() => {}); },
@@ -1648,6 +1840,9 @@ async function init() {
     }
     if (area !== 'local') return;
     if (changes.history) { state.history = changes.history.newValue || []; $('undo').disabled = !state.history.length; }
+    // what is stored now: this window's next save of these merges onto it (see saveMap)
+    if (changes.offers) syncedMaps.offers = copy(changes.offers.newValue || {});
+    if (changes.bp) syncedMaps.bp = copy(changes.bp.newValue || {});
     let fresh = false;
     for (const [id, o] of Object.entries((changes.offers && changes.offers.newValue) || {})) {
       if (o && o.v === OFFERS_VER && !(state.offers[id] && state.offers[id].ts >= o.ts)) { state.offers[id] = o; delete state.status[id]; fresh = true; }
@@ -1685,6 +1880,8 @@ async function init() {
   if (started.length) setTimeout(() => loadAll(), Math.max(...started) + 90000 - Date.now() + 200);
 
   render();
+  // the upgrade put products added from BestPrice back in the list (see load)
+  if (state.restored.length) flash(t('restoredFromBp', { names: state.restored.join(', ') }));
   loadAll();
 }
 

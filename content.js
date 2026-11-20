@@ -124,6 +124,7 @@
       notRemoved: (n) => `${n} other ${n === 1 ? 'product' : 'products'} could not be removed.`,
       notRead: 'Your cart could not be read, so nothing else was removed from it.',
       nothingElse: 'There was nothing else in your cart to remove.',
+      keptRest: 'The order did not go into your cart exactly as confirmed, so nothing else was removed from it.',
       choice: 'Choose a size or option on their page, then add them:',
       failed: 'Could not be added (add them from their pages):',
       fewer: (name, n) => `${name}: only ${n} available`,
@@ -144,6 +145,7 @@
       notRemoved: (n) => (n === 1 ? '1 άλλο προϊόν δεν αφαιρέθηκε.' : `${n} άλλα προϊόντα δεν αφαιρέθηκαν.`),
       notRead: 'Το καλάθι σου δεν διαβάστηκε, οπότε δεν αφαιρέθηκε τίποτε άλλο από αυτό.',
       nothingElse: 'Δεν υπήρχε τίποτε άλλο στο καλάθι σου για αφαίρεση.',
+      keptRest: 'Η παραγγελία δεν μπήκε στο καλάθι σου ακριβώς όπως την επιβεβαίωσες, οπότε δεν αφαιρέθηκε τίποτε άλλο από αυτό.',
       choice: 'Διάλεξε μέγεθος ή επιλογή στη σελίδα τους και πρόσθεσέ τα:',
       failed: 'Δεν προστέθηκαν (πρόσθεσέ τα από τη σελίδα τους):',
       fewer: (name, n) => `${name}: διαθέσιμα μόνο ${n}`,
@@ -252,18 +254,6 @@
     return true;
   }
 
-  /** The site's own "Remove all": true when the cart is empty after it. */
-  async function removeAll(token, call) {
-    try {
-      const res = await fetch('/cart/clear.html', { method: 'POST', credentials: 'same-origin', headers: { 'X-CSRF-Token': token, Accept: 'text/html' } });
-      if (!res.ok) return false;
-      try { return (await cartLines(call)).length === 0; } catch { return true; } // trust the site's answer
-    } catch (e) {
-      console.warn('Eksipno Kalathi: Remove all failed', e);
-      return false;
-    }
-  }
-
   /** A product's name as the cart page shows it. */
   function nameOnPage(sku) {
     for (const a of document.querySelectorAll(`a[href*="/s/${sku}/"]`)) {
@@ -283,6 +273,7 @@
     }
     if (last.notRemoved) lines.push(T.notRemoved(last.notRemoved));
     if (last.notRead) lines.push(T.notRead);
+    if (last.keptRest) lines.push(T.keptRest);
     if (last.nothingElse) lines.push(T.nothingElse);
     lines.push(...last.fewer.map((f) => T.fewer(f.name, f.n)));
     lines.push(...(last.more || []).map((f) => T.inCart(f.name, f.n)));
@@ -364,41 +355,6 @@
       try { before = await cartLines(call); } catch (e) { console.warn('Eksipno Kalathi: could not read the cart', e); if (i < 2) await pause(1500); }
     }
 
-    // "Empty the rest", before the order goes in: the other products one by
-    // one, so this order's products already in the cart stay as they are.
-    if (cartJob.empty) {
-      if (!before) {
-        // What else is in the cart is not known, so nothing is removed: the
-        // site's own "Remove all" would take this order's products with it.
-        result.notRead = true;
-      } else {
-        const rest = before.filter((l) => !skus.has(l.sku));
-        result.nothingElse = !rest.length;
-        // their names, read from the page before they leave it (it draws them a moment after loading)
-        for (let i = 0; i < 15 && rest.some((l) => !nameOnPage(l.sku)); i++) await pause(200);
-        const names = rest.map((l) => nameOnPage(l.sku)); // '' when not shown
-        const left = [];
-        for (let i = 0; i < rest.length; i++) {
-          cartBox([T.emptying(i + 1, rest.length)]);
-          try {
-            await call(`/cart/remove_line_item/${rest[i].id}.json`);
-            result.removed.push(names[i]);
-          } catch (e) {
-            left.push(i);
-            console.warn('Eksipno Kalathi: could not remove line', rest[i].id, e);
-          }
-        }
-        if (left.length) {
-          // Some would not go. The site's own "Remove all" takes everything, so
-          // it is used only when none of this order's products is in the cart.
-          if (!before.some((l) => skus.has(l.sku)) && await removeAll(token, call)) {
-            for (const i of left) result.removed.push(names[i]);
-            before = [];
-          } else result.notRemoved = left.length;
-        }
-      }
-    }
-
     const errors = new Set();
     const skipped = new Set(); // left for a size or option to be chosen on Skroutz
     for (let i = 0; i < items.length; i++) {
@@ -443,6 +399,36 @@
         // the cart could not be read again: the answer to the request is all there is
         const selected = now ? !!now.find((x) => x.id === l.id && x.selected) : ticked;
         if (selected) result.ok++; else result.unticked.push(item.name);
+      }
+    }
+
+    // "Empty the rest", only once the order is in the cart as confirmed: every
+    // product from its shop, in its full quantity, ticked for checkout. Otherwise
+    // what the cart held stays, so it is never left emptier than the order needs.
+    // The other products go one by one, so this order's stay. (Products that need
+    // a size were not part of what was confirmed, so they do not stop it.)
+    if (cartJob.empty) {
+      if (!after) {
+        // what is in the cart now is not known: nothing is removed
+        result.notRead = true;
+      } else if (result.failed.length || result.otherShop.length || result.fewer.length || result.unticked.length) {
+        result.keptRest = true;
+      } else {
+        const rest = after.filter((l) => !skus.has(l.sku));
+        result.nothingElse = !rest.length;
+        // their names, read from the page (it draws them a moment after loading)
+        for (let i = 0; i < 15 && rest.some((l) => !nameOnPage(l.sku)); i++) await pause(200);
+        for (const l of rest) {
+          cartBox([T.emptying(result.removed.length + result.notRemoved + 1, rest.length)]);
+          const name = nameOnPage(l.sku); // '' when not shown
+          try {
+            await call(`/cart/remove_line_item/${l.id}.json`);
+            result.removed.push(name);
+          } catch (e) {
+            result.notRemoved++;
+            console.warn('Eksipno Kalathi: could not remove line', l.id, e);
+          }
+        }
       }
     }
     await chrome.storage.local.set({ [RESULT_KEY]: { ts: Date.now(), result } });

@@ -1,6 +1,6 @@
 import { parseSkroutzSearch } from './lib/parser.js';
 import { ORIGIN, PRODUCT_URL, BP_VER, OFFERS_VER, fetchShopsList as fetchOffers, getMeta, skFetch } from './lib/skroutz.js';
-import { optimize } from './lib/optimizer.js';
+import { optimize, shipmentFeeOf } from './lib/optimizer.js';
 import { t, count, setLang, defaultLang, applyStatic } from './lib/i18n.js';
 import { findMatch, fetchOffers as fetchBpOffers, fetchItemMeta, titleCodes, parseItemLink, rank, evidence, sameModel, conflict } from './lib/bestprice.js';
 
@@ -1091,13 +1091,15 @@ function confirmCart(items, sol, from, key) {
     const sk = s.shipments.filter((x) => !x.key.startsWith('sbp'));
     const onBp = s.shipments.filter((x) => x.key.startsWith('sbp')).reduce((n, x) => n + x.items.length, 0);
     // What goes into the cart: not the products whose shop asks for a size or
-    // option first (added from their pages). Their shipments' shipping counts
-    // once one of the products added is in them.
+    // option first (added from their pages). A shipment's shipping is worked out
+    // again for the products that go: without the others it may no longer reach
+    // free shipping.
     const adding = list.filter((i) => !i.choice);
     const goes = (it) => adding.some((i) => i.sku === String(it.productId) && i.card === String(it.cardId));
     const parts = sk.map((x) => ({ x, its: x.items.filter(goes) })).filter((p) => p.its.length);
     const stores = new Set(parts.flatMap((p) => p.its.map((it) => it.shopName))).size;
-    const amount = parts.reduce((sum, p) => sum + p.x.fee + p.its.reduce((a, it) => a + it.price, 0), 0);
+    const fee = (p) => (p.its.length === p.x.items.length ? p.x.fee : shipmentFeeOf(p.its) ?? p.x.fee);
+    const amount = parts.reduce((sum, p) => sum + fee(p) + p.its.reduce((a, it) => a + it.price, 0), 0);
     const choice = list.length - adding.length;
     // a product the user still has to check in the list (see reviewMeta) is not sent
     const review = list.filter((i) => state.cart.some((p) => p.id === i.sku && p.review));

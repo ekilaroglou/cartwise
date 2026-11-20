@@ -1,6 +1,6 @@
 # Eksipno Kalathi
 
-A Chrome / Edge extension that finds the cheapest way to buy a list of skroutz.gr products.
+A Chrome extension that finds the cheapest way to buy a list of skroutz.gr products.
 
 For the products in your list it reads the price of every store (including offers shipped from Skroutz Hub) and shows three results as tabs, each with its total:
 
@@ -12,7 +12,7 @@ For the products in your list it reads the price of every store (including offer
 
 - The Skroutz cart holds one line per product. A product already in it is moved to the chosen store and set to the chosen quantity, so pressing the button twice does not double anything.
 - Each offer goes in as one piece and then gets its quantity, never above what the store has (the note on the cart page then says "only N available"; the results already use only stores that sell the whole quantity, so this happens only when a store's limit dropped since the prices were read). Asking Skroutz for more than a store has would make it pick another store.
-- With **empty the rest** ticked, the other products are removed one by one before the order goes in, including ones that this result buys on BestPrice. The order's own products already in the cart stay. Skroutz's own "Remove all" is used only if a product cannot be removed and none of the order's products is in the cart. If the cart cannot be read at all, nothing is removed. The note lists what was removed.
+- With **empty the rest** ticked, the other products are removed one by one after the order has gone in, including ones that this result buys on BestPrice. The order's own products stay. If the order did not go in exactly as confirmed (each product from its shop, in its full quantity, ticked for checkout), or the cart cannot be read, nothing is removed. The note lists what was removed.
 - A product moved to another shop gets its quantity back if the move does not happen.
 - The order runs on the cart page the popup opens. If Skroutz first shows its "checking your browser" page and the address loses its #eksipno-kalathi on the way, it runs on the next cart page within 3 minutes. While Skroutz is slow to open the cart, a note says Eksipno Kalathi is waiting; if the cart does not open, the note says so (reloading the page within a few minutes tries again). An order confirmed longer ago is not run, and the note says so.
 - While a result is being recalculated (the list just changed), its button waits for the new result. Pressing **Add to cart** in the question checks once more that the result for the list, its prices and the settings as they are now is still the same (every product, quantity, shop and offer, every price and shipping fee, BestPrice ones included, and the total, compared in whole cents). If not, nothing is sent: the question shows the updated order and its amount instead, and nothing is added until you confirm that one.
@@ -21,9 +21,7 @@ For the products in your list it reads the price of every store (including offer
 
 ## Install
 
-1. Open `edge://extensions` (Edge) or `chrome://extensions` (Chrome).
-2. Turn on **Developer mode**.
-3. Click **Load unpacked** and pick this folder.
+Install **Eksipno Kalathi** from the Chrome Web Store: open its page there and press **Add to Chrome**. It works in Google Chrome and in Microsoft Edge, which installs extensions from the Chrome Web Store too.
 
 ## Use
 

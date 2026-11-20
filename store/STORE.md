@@ -23,12 +23,12 @@ Upload `dist/eksipno-kalathi-<version>.zip`.
 >
 > Add products from any skroutz.gr product page with the "+ Add to Eksipno Kalathi" button. Eksipno Kalathi reads every store's price and shipping cost and shows three totals:
 > • Single delivery: everything in one shipment, from one store or from Skroutz Hub.
-> • Skroutz only: the cheapest mix of Skroutz stores, shipping included.
-> • With BestPrice: whether buying some products from BestPrice.gr merchants makes the order cheaper.
+> • Skroutz only: the cheapest mix of Skroutz stores, shipping included, all through the Skroutz cart.
+> • Cheapest overall: whether buying some products outside the Skroutz cart makes the order cheaper: Skroutz offers you buy on the shop's site (Skroutz's "See it in the shop"), or BestPrice.gr merchants.
 >
 > It follows Skroutz's shipping rules (one fee per store, Skroutz Hub items share one fee, free shipping thresholds, Skroutz Plus), and can leave out offers that are not in stock or would arrive too late.
 >
-> When you have chosen, "Add to Skroutz cart" puts the chosen offers in your own Skroutz cart, after asking you, and can also empty the rest of that cart.
+> When you have chosen, "Add to Skroutz cart" puts the chosen offers in your own Skroutz cart, after asking you, and can also empty the rest of that cart. Products bought on a shop's site or via BestPrice have a direct link.
 >
 > Your list stays in your browser. Eksipno Kalathi has no servers, no accounts and no tracking.
 >
@@ -40,12 +40,12 @@ Upload `dist/eksipno-kalathi-<version>.zip`.
 >
 > Πρόσθεσε προϊόντα από οποιαδήποτε σελίδα προϊόντος του skroutz.gr με το κουμπί «+ Προσθήκη στο Eksipno Kalathi». Το Eksipno Kalathi διαβάζει την τιμή και τα μεταφορικά κάθε καταστήματος και δείχνει τρία σύνολα:
 > • Μία παράδοση: όλα σε μία αποστολή, από ένα κατάστημα ή από το Skroutz Hub.
-> • Μόνο Skroutz: ο φθηνότερος συνδυασμός καταστημάτων του Skroutz, με τα μεταφορικά.
-> • Με BestPrice: αν η αγορά κάποιων προϊόντων από καταστήματα του BestPrice.gr φθηναίνει την παραγγελία.
+> • Μόνο Skroutz: ο φθηνότερος συνδυασμός καταστημάτων του Skroutz, με τα μεταφορικά, όλα μέσω του καλαθιού του Skroutz.
+> • Φθηνότερο συνολικά: αν η αγορά κάποιων προϊόντων εκτός του καλαθιού του Skroutz φθηναίνει την παραγγελία: προσφορές του Skroutz που αγοράζονται στο site του καταστήματος («Δες το στο κατάστημα») ή καταστήματα του BestPrice.gr.
 >
 > Ακολουθεί τους κανόνες αποστολής του Skroutz (ένα κόστος ανά κατάστημα, κοινό κόστος για τα προϊόντα του Skroutz Hub, δωρεάν μεταφορικά, Skroutz Plus) και μπορεί να αφήσει έξω προσφορές που δεν είναι διαθέσιμες ή θα αργούσαν.
 >
-> Όταν διαλέξεις, η «Προσθήκη στο καλάθι του Skroutz» βάζει τις επιλεγμένες προσφορές στο δικό σου καλάθι, αφού σε ρωτήσει, και μπορεί επίσης να αδειάσει το υπόλοιπο καλάθι.
+> Όταν διαλέξεις, η «Προσθήκη στο καλάθι του Skroutz» βάζει τις επιλεγμένες προσφορές στο δικό σου καλάθι, αφού σε ρωτήσει, και μπορεί επίσης να αδειάσει το υπόλοιπο καλάθι. Τα προϊόντα που αγοράζονται στο site καταστήματος ή μέσω BestPrice έχουν άμεσο σύνδεσμο.
 >
 > Η λίστα σου μένει στον browser σου. Το Eksipno Kalathi δεν έχει διακομιστές, λογαριασμούς ή παρακολούθηση.
 >
@@ -53,12 +53,12 @@ Upload `dist/eksipno-kalathi-<version>.zip`.
 
 ### Graphics
 - **Store icon, 128×128:** `store/logo-128.png` (a 96 px icon with 16 px of transparent margin, as the store asks). The icon's source is `icon-source.png`.
-- **Screenshots:** at least one, 1280×800 or 640×400; upload all three, in this order: `store/screenshot-1-en.png` (the cheapest Skroutz result), `store/screenshot-2-en.png` (the BestPrice comparison), `store/screenshot-3-en.png` (the settings). They show the real popup in English; use the same ones for the Greek listing.
+- **Screenshots:** at least one, 1280×800 or 640×400; upload all three, in this order: `store/screenshot-1-en.png` (the cheapest Skroutz result), `store/screenshot-2-en.png` (the Cheapest overall result), `store/screenshot-3-en.png` (the settings). They show the real popup in English; use the same ones for the Greek listing.
 - **Small promo tile, 440×280:** `store/promo-440x280.png`. The dashboard says whether it is required for your listing.
 
 ### Privacy practices tab
 - **Single purpose:**
-  > Find the cheapest way to buy a list of Skroutz products (across Skroutz stores, Skroutz Hub and BestPrice.gr merchants), and put the chosen offers in the user's Skroutz cart.
+  > Find the cheapest way to buy a list of Skroutz products (across Skroutz stores, Skroutz Hub, Skroutz offers bought on the shop's own site, and BestPrice.gr merchants), and put the chosen offers in the user's Skroutz cart.
 - **Justification for `storage`:**
   > Keeps the user's product list, settings and recently read prices in the browser.
 - **Justification for `offscreen`:**

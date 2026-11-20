@@ -20,6 +20,8 @@
   --bad: #c0392b;
   --hub: #2f5bd8;
   --hub-soft: #e8eeff;
+  --site-text: #0f766e; /* bought on the shop's own website */
+  --site-soft: #ddf4f0;
   --radius: 12px;
 }
 @media (prefers-color-scheme: dark) {
@@ -40,6 +42,8 @@
     --bad: #ff7b6b;
     --hub: #8da9ff;
     --hub-soft: #232c4a;
+    --site-text: #5eead4;
+    --site-soft: #163632;
   }
 }
 
@@ -202,6 +206,7 @@ a.n:hover { color: var(--accent-text); }
 .m-pick a:hover { text-decoration: underline; }
 .badge.bp { background: var(--bp-soft); color: var(--bp-text); }
 .badge.sk { background: var(--warn-soft); color: var(--warn-text); }
+.badge.site { background: var(--site-soft); color: var(--site-text); }
 
 /* settings panel */
 .top .icon-btn + .icon-btn { margin-left: -4px; }

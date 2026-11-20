@@ -1,6 +1,6 @@
 # Eksipno Kalathi – Privacy Policy
 
-_Last updated: 20 November 2026_
+_Last updated: 21 November 2026_
 
 Eksipno Kalathi is a browser extension that finds the cheapest way to buy a list of products on skroutz.gr, and checks whether bestprice.gr merchants make it cheaper. This policy explains what the extension does with data.
 
@@ -13,7 +13,7 @@ Eksipno Kalathi does not collect, transmit, sell or share any personal data. It 
 The extension keeps the following in your browser, on your own device, in its own extension storage (`chrome.storage.local`, unless noted):
 
 - your product list (product ids, names, product page and picture addresses, quantities);
-- your settings (Skroutz Plus on/off, delivery type, availability filters, language, whether you have seen the quick guide);
+- your settings (Skroutz Plus on/off, delivery type, availability filters, BestPrice and offers bought on the shop’s site on/off, language, whether you have seen the quick guide);
 - prices and shop lists it has read from skroutz.gr and bestprice.gr, kept briefly so they do not have to be re-read every time;
 - which BestPrice product corresponds to each Skroutz product;
 - earlier versions of your list, for the Undo button;
@@ -31,7 +31,7 @@ To read prices, the extension requests public pages from two websites, directly 
 - `https://www.skroutz.gr`
 - `https://www.bestprice.gr`
 
-These are the same pages you would see by visiting the sites yourself, requested only for the products in your list. Prices are read without your Skroutz or BestPrice login cookies (the only exception is your own Skroutz cart, described below). As with any visit, those sites receive your IP address and may log the request under their own privacy policies. The extension contacts no other server.
+These are the same pages you would see by visiting the sites yourself, requested only for the products in your list. Prices are read without your Skroutz or BestPrice login cookies (the only exception is your own Skroutz cart, described below). As with any visit, those sites receive your IP address and may log the request under their own privacy policies. The extension contacts no other server. Results can link to a shop's own website (through Skroutz's or BestPrice's link to it); that page opens only when you click the link, like any link.
 
 ## Adding to your Skroutz cart
 
@@ -72,14 +72,14 @@ Eksipno Kalathi is an independent project and is not affiliated with, endorsed b
 
 # Eksipno Kalathi – Πολιτική Απορρήτου
 
-_Τελευταία ενημέρωση: 20 Νοεμβρίου 2026_
+_Τελευταία ενημέρωση: 21 Νοεμβρίου 2026_
 
 Το Eksipno Kalathi είναι μια επέκταση browser που βρίσκει τον φθηνότερο τρόπο να αγοράσεις μια λίστα προϊόντων στο skroutz.gr και στο bestprice.gr.
 
 **Με λίγα λόγια:** το Eksipno Kalathi δεν συλλέγει, δεν μεταδίδει, δεν πουλάει και δεν μοιράζεται προσωπικά δεδομένα. Δεν έχει διακομιστές, λογαριασμούς, στατιστικά χρήσης ή διαφημίσεις. Ό,τι αποθηκεύει μένει στον browser σου.
 
 - **Τι αποθηκεύεται τοπικά:** η λίστα προϊόντων σου (με τις διευθύνσεις των σελίδων τους), οι ρυθμίσεις σου, οι τιμές και τα καταστήματα που διάβασε από τα δύο sites (για λίγο, ώστε να μη διαβάζονται ξανά κάθε φορά), η αντιστοίχιση προϊόντων Skroutz–BestPrice, οι προηγούμενες εκδόσεις της λίστας για την Αναίρεση, καθώς και τα τελευταία σύνολα και ένα αντίγραφο της τελευταίας εμφάνισης του παραθύρου (στο `localStorage` της σελίδας της επέκτασης), ώστε να ανοίγει αμέσως χωρίς τρεμόπαιγμα. Όσο ένα προϊόν που μόλις πρόσθεσες αναζητείται στο παρασκήνιο, κρατιέται ο αριθμός του στο `chrome.storage.session` (σβήνει όταν κλείσει ο browser). Όταν επιβεβαιώνεις την «Προσθήκη στο καλάθι του Skroutz», κρατιούνται οι προσφορές προς προσθήκη (αριθμοί προϊόντων και καταστημάτων, ποσότητες και ονόματα προϊόντων) μέχρι να τις πάρει η σελίδα του καλαθιού, μέσα σε 3 λεπτά, και μετά σβήνονται (όσες δεν χρησιμοποιηθούν εγκαίρως σβήνονται την επόμενη φορά που θα ανοίξει το Eksipno Kalathi ή μια σελίδα καλαθιού του Skroutz). Μετά την προσθήκη κρατιέται μια σύντομη σύνοψη (ονόματα προϊόντων που προστέθηκαν, αφαιρέθηκαν ή δεν προστέθηκαν) μέχρι να σου τη δείξει η σελίδα του καλαθιού λίγα δευτερόλεπτα μετά, και μετά σβήνεται. Τίποτα δεν γράφεται στον αποθηκευτικό χώρο των ίδιων των sites. Όλα διαγράφονται όταν αφαιρέσεις την επέκταση.
-- **Αιτήματα δικτύου:** η επέκταση ζητά δημόσιες σελίδες μόνο από το `www.skroutz.gr` και το `www.bestprice.gr`, απευθείας από τον browser σου και χωρίς τα cookies σύνδεσής σου για την ανάγνωση τιμών (εξαίρεση μόνο το καλάθι σου στο Skroutz, παρακάτω). Όπως σε κάθε επίσκεψη, τα sites αυτά βλέπουν τη διεύθυνση IP σου σύμφωνα με τις δικές τους πολιτικές. Δεν γίνεται επικοινωνία με κανέναν άλλο διακομιστή.
+- **Αιτήματα δικτύου:** η επέκταση ζητά δημόσιες σελίδες μόνο από το `www.skroutz.gr` και το `www.bestprice.gr`, απευθείας από τον browser σου και χωρίς τα cookies σύνδεσής σου για την ανάγνωση τιμών (εξαίρεση μόνο το καλάθι σου στο Skroutz, παρακάτω). Όπως σε κάθε επίσκεψη, τα sites αυτά βλέπουν τη διεύθυνση IP σου σύμφωνα με τις δικές τους πολιτικές. Δεν γίνεται επικοινωνία με κανέναν άλλο διακομιστή. Τα αποτελέσματα μπορεί να έχουν σύνδεσμο προς το site ενός καταστήματος (μέσω του συνδέσμου του Skroutz ή του BestPrice)· η σελίδα αυτή ανοίγει μόνο αν πατήσεις τον σύνδεσμο, όπως κάθε σύνδεσμος.
 - **Προσθήκη στο καλάθι του Skroutz:** όταν πατάς «Προσθήκη στο καλάθι του Skroutz», η επέκταση ζητά πρώτα επιβεβαίωση και ρωτά αν θέλεις να αφαιρεθούν τα υπόλοιπα προϊόντα του καλαθιού σου. Για να σου πει πόσα άλλα προϊόντα έχει, διαβάζει τη λίστα του καλαθιού σου από το skroutz.gr με την κανονική σύνδεσή σου (μόνο αυτό το αίτημα γίνεται με τα cookies σου στο Skroutz, όταν δείχνεις ή πατάς το κουμπί). Αν επιβεβαιώσεις, ανοίγει τη σελίδα του καλαθιού σου σε νέα καρτέλα (αν το Skroutz ελέγξει πρώτα τον browser σου, τη δουλειά την κάνει η επόμενη σελίδα καλαθιού που θα ανοίξεις μέσα σε 3 λεπτά) και από εκεί, με τα ίδια αιτήματα που κάνουν τα κουμπιά του site, προσθέτει τις προσφορές του αποτελέσματος που διάλεξες, ορίζει τις ποσότητες (ώστε ένα δεύτερο πάτημα να μην τις διπλασιάζει) και, μόνο αν το επέλεξες, αφαιρεί τα άλλα προϊόντα, αφού μπει όλη η παραγγελία στο καλάθι όπως την επιβεβαίωσες (αλλιώς δεν αφαιρείται τίποτα). Δεν κάνει παραγγελία και δεν πληρώνει. Ό,τι διαβάζει για το καλάθι σου χρησιμοποιείται μόνο στη συσκευή σου, για αυτή τη δουλειά: δεν στέλνεται πουθενά και δεν κρατιέται, εκτός από τις προσφορές που περιμένουν να προστεθούν και τη σύντομη σύνοψη που αναφέρονται παραπάνω, οι οποίες σβήνονται μόλις χρησιμοποιηθούν και εμφανιστούν. Η επέκταση δεν διαβάζει τα στοιχεία του λογαριασμού σου.
 - **Άδειες:** *storage* για τη λίστα και τις ρυθμίσεις· *offscreen* για να διαβάζει στο παρασκήνιο τις τιμές ενός προϊόντος που μόλις πρόσθεσες με το κουμπί της σελίδας (μόνο από τα δύο sites)· πρόσβαση στο skroutz.gr και στο bestprice.gr για να διαβάζει τιμές και μεταφορικά, να βλέπει σε ποια σελίδα προϊόντος τους βρίσκεσαι όταν ανοίγεις την επέκταση, να εμφανίζει το κουμπί «Προσθήκη στο Eksipno Kalathi» και να βάζει στο καλάθι του Skroutz τις προσφορές που διάλεξες όταν το ζητήσεις.
 - **Τι δεν κάνει:** δεν συλλέγει ονόματα, email, στοιχεία πληρωμής, κωδικούς ή τοποθεσία· δεν παρακολουθεί ποιες σελίδες επισκέπτεσαι· δεν κάνει παραγγελίες ούτε πληρωμές· δεν αλλάζει τίποτα στον λογαριασμό σου στο Skroutz ή στο BestPrice εκτός από το καλάθι του Skroutz όταν το επιβεβαιώσεις· δεν φορτώνει κώδικα από το διαδίκτυο.

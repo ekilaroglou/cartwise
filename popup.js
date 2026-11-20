@@ -764,15 +764,28 @@ function rawOffers(item) {
   return { sk, bp };
 }
 
+/** Offers on shops' own websites are used (the setting, on unless turned off). */
+const sitesOn = () => state.settings.shopSites !== false;
+
 /**
- * The offers the search may use for a product. BestPrice merchants get their
- * own ids, so they are never merged with a Skroutz store of the same number
- * (or its Plus eligibility).
+ * The offers the search may use for a product: `sk` through the Skroutz cart,
+ * `site` on shops' own websites (listed on Skroutz), `bp` BestPrice merchants.
+ * The last two get their own shop ids, so they are never merged with a Skroutz
+ * cart shipment of the same shop (or its Plus eligibility): an order on the
+ * shop's website is a separate order. Their shipments' keys start with "sw" and
+ * "sbp" (see offCart).
  */
 function sources(item) {
   const raw = rawOffers(item);
-  return { sk: raw.sk, bp: raw.bp.map((o) => ({ ...o, shopId: 'bp' + o.shopId })) };
+  return {
+    sk: raw.sk.filter((o) => !o.site),
+    site: sitesOn() ? raw.sk.filter((o) => o.site).map((o) => ({ ...o, shopId: 'w' + o.shopId })) : [],
+    bp: raw.bp.map((o) => ({ ...o, shopId: 'bp' + o.shopId })),
+  };
 }
+
+/** A shipment bought outside the Skroutz cart: on a shop's own website, found on Skroutz or on BestPrice. */
+const offCart = (s) => s.key.startsWith('sbp') || s.key.startsWith('sw');
 
 function passes(o) {
   const s = state.settings;
@@ -934,20 +947,24 @@ function productMeta(item) {
   // could not be read again: the totals still use the prices read before, so say so
   const stale = status === 'error' && [h('span', { class: 'p-stale' }, t('notUpdated')), ' ',
     h('button', { class: 'retry', onclick: () => loadOffers(item.id, true) }, t('retry')), ' · '];
-  if (data && !data.offers.length) return h('div', { class: 'p-meta err' }, stale, t('noStore'));
   if (!data) return h('div', { class: 'p-meta' }, ' ');
-  const min = Math.min(...data.offers.map((o) => o.price));
-  const shops = new Set(data.offers.map((o) => o.shopId)).size;
-  const hub = data.offers.some((o) => o.hub);
-  // No store sells this many: say so first, with a one-click way down to the
-  // most one store has. Counted among the stores the results use (those that
-  // fit the availability settings), so the number is the one the results give.
+  // offers on shops' own websites count here only when the setting uses them
+  const usable = data.offers.filter((o) => !o.site || sitesOn());
+  if (!usable.length) return h('div', { class: 'p-meta err' }, stale, t('noStore'));
+  const min = Math.min(...usable.map((o) => o.price));
+  const shops = new Set(usable.map((o) => o.shopId)).size;
+  const hub = usable.some((o) => o.hub);
+  // No store sells this many through the Skroutz cart: say so first, with a
+  // one-click way down to the most one store has. Counted among the stores the
+  // results use (those that fit the availability settings), so the number is
+  // the one the results give.
   const qty = item.qty || 1;
-  const fit = data.offers.filter(passes);
+  const cartOffers = data.offers.filter((o) => !o.site);
+  const fit = cartOffers.filter(passes);
   const most = fit.length ? mostOf(fit) : Infinity;
   const short = qty > most && [h('span', { class: 'p-stale' }, t('mostPerStore', { n: most })), ' ',
     h('button', { class: 'retry', onclick: () => qtyTo(item.id, most) }, t('setQtyTo', { n: most })), ' · '];
-  const tip = fit.length < data.offers.length ? 'mostPerStoreTipFit' : 'mostPerStoreTip';
+  const tip = fit.length < cartOffers.length ? 'mostPerStoreTipFit' : 'mostPerStoreTip';
   return h('div', { class: 'p-meta', title: short ? t(tip, { n: most }) : null }, stale, short,
     t('fromStores', { price: eur(min), stores: count(shops, 'store') }),
     hub && ' · ', hub && h('span', { class: 'badge hub' }, 'Hub'));
@@ -981,11 +998,14 @@ function renderProducts() {
 }
 
 // ---------- rendering: result cards ----------
+// where a shipment is bought (see tagSources): through the Skroutz cart, on the shop's own website, or via BestPrice
+const SRC_CLASS = { sk: 'sk', site: 'site', bp: 'bp' };
+const srcLabel = (src) => (src === 'bp' ? 'BestPrice' : src === 'site' ? t('srcSite') : 'Skroutz');
 /** ctx: {name(id), image(id), url(item, shipment), mark?(item, shipment)} */
 function shipmentView(s, ctx, hideHead = false) {
   const title = s.hub
     ? [h('span', { class: 'badge hub' }, 'Skroutz Hub'), h('span', {}, s.shops.join(' + '))]
-    : [s.showSrc && h('span', { class: 'badge ' + (s.src === 'BestPrice' ? 'bp' : 'sk') }, s.src), h('span', {}, s.shops[0])];
+    : [s.showSrc && h('span', { class: 'badge ' + SRC_CLASS[s.src], title: s.src === 'site' ? t('siteTip') : null }, srcLabel(s.src)), h('span', {}, s.shops[0])];
   const ship = s.fee > 0
     // a fee the shop does not show is an estimate: said in the tooltip only
     ? h('span', { class: 'v', title: s.feeEstimated ? t('feeAssumed') : null }, eur(s.fee))
@@ -1014,7 +1034,7 @@ function shipmentView(s, ctx, hideHead = false) {
 function skroutzItems(sol) {
   const items = [];
   for (const s of sol.shipments) {
-    if (s.key.startsWith('sbp')) continue; // BestPrice merchants are bought on their own sites
+    if (offCart(s)) continue; // bought on the shops' own websites, through their links
     for (const it of s.items) {
       // choice: the shop asks for a size or option first, so it is added from its page
       if (it.cardId) items.push({ sku: String(it.productId), card: String(it.cardId), qty: it.qty || 1, name: it.name, choice: !!it.choice });
@@ -1088,8 +1108,8 @@ function confirmCart(items, sol, from, key) {
   };
   const draw = () => {
     const { items: list, sol: s } = order;
-    const sk = s.shipments.filter((x) => !x.key.startsWith('sbp'));
-    const onBp = s.shipments.filter((x) => x.key.startsWith('sbp')).reduce((n, x) => n + x.items.length, 0);
+    const sk = s.shipments.filter((x) => !offCart(x));
+    const elsewhere = s.shipments.filter(offCart).reduce((n, x) => n + x.items.length, 0);
     // What goes into the cart: not the products whose shop asks for a size or
     // option first (added from their pages). A shipment's shipping is worked out
     // again for the products that go: without the others it may no longer reach
@@ -1105,7 +1125,7 @@ function confirmCart(items, sol, from, key) {
     const review = list.filter((i) => state.cart.some((p) => p.id === i.sku && p.review));
     what.textContent = t('confirmWhat', { products: count(adding.length, 'product'), stores: count(stores, 'store'), amount: eur(amount) });
     notes.replaceChildren(...[
-      onBp > 0 && h('p', { class: 'c-note' }, t('confirmBpNote', { n: onBp })),
+      elsewhere > 0 && h('p', { class: 'c-note' }, t('confirmBpNote', { n: elsewhere })),
       choice > 0 && h('p', { class: 'c-note' }, t('confirmChoiceNote', { n: choice })),
       review.length > 0 && h('p', { class: 'c-note c-warn' }, t('reviewFirst', { names: review.map((i) => i.name).join(', ') })),
     ].filter(Boolean));
@@ -1208,7 +1228,7 @@ function cartButton(sol, from) {
   if (!items.length) return null;
   // every one of its shops asks for a size or option first: nothing to put in the cart from here
   if (!items.some((i) => !i.choice)) return h('div', { class: 'r-note' }, t('allNeedChoice'));
-  const mixed = sol.shipments.some((s) => s.key.startsWith('sbp'));
+  const mixed = sol.shipments.some(offCart);
   const key = orderKey(sol);
   return h('div', { class: 'r-actions' },
     h('button', {
@@ -1336,18 +1356,21 @@ function tabProducts(kind, list) {
   // other: products priced from the other site; filtered: products the availability settings leave without an offer;
   // short: products no store (within those settings) sells in the quantity wanted
   const info = { other: 0, filtered: [], missing: [], short: [] };
-  for (const { item, sk, bp } of list) {
+  for (const { item, sk, site, bp } of list) {
     let offers;
+    // Skroutz only (and single delivery): the Skroutz cart. A product no shop
+    // sells through it is priced from a shop's own website listed on Skroutz,
+    // or else from BestPrice (marked so on the result).
+    const skAny = sk.length ? sk : site;
     if (kind === 'skroutz') {
-      // a product Skroutz does not sell is priced from BestPrice
-      offers = sk.length ? sk : bp;
-      if (!sk.length && bp.length) info.other++;
+      offers = skAny.length ? skAny : bp;
+      if (!sk.length && offers.length) info.other++;
     } else if (kind === 'bestprice') {
       // buying on BestPrice: what it cannot supply (within the settings) comes from Skroutz
       const fit = bp.filter(passes);
-      offers = fit.length ? fit : sk;
-      if (!fit.length && sk.length) info.other++;
-    } else offers = [...sk, ...bp];
+      offers = fit.length ? fit : skAny;
+      if (!fit.length && skAny.length) info.other++;
+    } else offers = [...sk, ...site, ...bp]; // cheapest overall: all three
     if (!offers.length) { info.missing.push(item.id); continue; }
     offers = offers.filter(passes);
     if (!offers.length) { info.filtered.push(item.name); continue; }
@@ -1385,7 +1408,11 @@ function fingerprint(list) {
 }
 
 function compute() {
-  const c = { bpOn: state.settings.bestprice !== false, real: state.cart.filter((p) => !isPh(p)), tabs: {} };
+  const c = { bpOn: state.settings.bestprice !== false, sitesOn: sitesOn(), real: state.cart.filter((p) => !isPh(p)), tabs: {} };
+  // BestPrice is used: turned on, and its site can be read
+  c.useBp = c.bpOn && state.bpAccess !== false;
+  // the "Cheapest overall" tab: shops' own websites, BestPrice, or both
+  c.allOn = c.sitesOn || c.bpOn;
   const phs = state.cart.filter(isPh);
   const pending = c.real.filter((p) => !state.offers[p.id]);
 
@@ -1418,7 +1445,7 @@ function compute() {
 
   const list = state.cart.map((item) => ({ item, ...sources(item) }));
   const s = state.settings;
-  const sig = [s.hasPlus ? 1 : 0, s.delivery, s.avail || 'any', +s.maxDays || 0, c.bpOn ? 1 : 0, state.bpAccess === false ? 0 : 1,
+  const sig = [s.hasPlus ? 1 : 0, s.delivery, s.avail || 'any', +s.maxDays || 0, c.bpOn ? 1 : 0, state.bpAccess === false ? 0 : 1, c.sitesOn ? 1 : 0,
     ...state.cart.map((p) => {
       const rec = state.bp[p.id];
       return [p.id, p.qty || 1,
@@ -1454,24 +1481,29 @@ function compute() {
   };
 
   c.tabs.skroutz = want('skroutz');
-  if (c.bpOn && state.bpAccess !== false && !c.busy) {
+  // Cheapest overall: with shops' own websites and/or BestPrice (it waits for the BestPrice lookups)
+  if ((c.sitesOn || c.useBp) && !(c.useBp && c.busy)) {
     c.tabs.overall = want('overall');
     c.mix = mixState(c);
     // no saving with BestPrice: work out what buying there would cost, to compare
-    if (c.mix && !c.mix.wins && c.priced.length) c.tabs.bestprice = want('bestprice');
+    if (c.mix && !c.mix.wins && c.useBp && c.priced.length) c.tabs.bestprice = want('bestprice');
   }
   return c;
 }
 
-/** Marks every shipment with its site; `showSrc` when the card should say so. */
+/**
+ * Marks every shipment with where it is bought: 'sk' (the Skroutz cart), 'site'
+ * (the shop's own website, listed on Skroutz) or 'bp' (via BestPrice); `showSrc`
+ * when the card should say so. Returns how many products each way.
+ */
 function tagSources(sol, always) {
-  let bp = 0, sk = 0;
+  const n = { sk: 0, site: 0, bp: 0 };
   for (const s of sol.shipments) {
-    s.src = s.key.startsWith('sbp') ? 'BestPrice' : 'Skroutz';
-    if (s.src === 'BestPrice') bp += s.items.length; else sk += s.items.length;
+    s.src = s.key.startsWith('sbp') ? 'bp' : s.key.startsWith('sw') ? 'site' : 'sk';
+    n[s.src] += s.items.length;
+    s.showSrc = always;
   }
-  for (const s of sol.shipments) s.showSrc = always;
-  return { bp, sk };
+  return n;
 }
 
 const tabTotal = (tab, pick) => (tab && tab.res && !tab.res.error ? pick(tab.res) : null);
@@ -1516,6 +1548,7 @@ function panelSingle(c, ctx) {
     badge: n > 1 && (best
       ? h('span', { class: 'badge win' }, t('alsoCheapestSk'))
       : h('span', { class: 'badge warn' }, t('moreThanSplit', { amount: eur(single.total - tab.res.overall.total) }))),
+    note: cheaperNote(c, single.total),
     extra: others.length > 0 && fold('others', false, 'others', t('moreSingles', { n: others.length }),
       others.map((s) => h('div', { class: 'row' },
         h('span', { class: 'n' }, s.hub && h('span', { class: 'badge hub' }, 'Skroutz Hub'), s.hub ? ' ' + s.shipments[0].shops.join(' + ') : s.label),
@@ -1540,6 +1573,7 @@ function panelSkroutz(c, ctx) {
     badge: single && (saving > 0.004
       ? h('span', { class: 'badge save' }, t('savesVsSingle', { amount: eur(saving) }))
       : h('span', { class: 'badge win' }, t('sameAsSingle'))),
+    note: cheaperNote(c, overall.total),
     warn: stoppedNote('skroutz', tab, overall),
   }, ctx)];
 }
@@ -1614,8 +1648,8 @@ function matchRow(item) {
 }
 
 /**
- * The cheapest way when BestPrice merchants may be used too, and whether that
- * beats buying on Skroutz only. null while it is not calculated.
+ * The cheapest way when shops' own websites and BestPrice merchants may be used
+ * too, and whether that beats buying on Skroutz only. null while it is not calculated.
  */
 function mixState(c) {
   const sol = tabTotal(c.tabs.overall, (r) => r.overall);
@@ -1623,7 +1657,26 @@ function mixState(c) {
   const from = tagSources(sol, true);
   const sk = tabTotal(c.tabs.skroutz, (r) => r.overall);
   const gain = sk ? sk.total - sol.total : null;
-  return { sol, from, gain, wins: from.bp > 0 && (gain == null || gain > 0.004) };
+  return { sol, from, gain, wins: from.bp + from.site > 0 && (gain == null || gain > 0.004) };
+}
+
+/** The products of a result by how they are bought: "2 via Skroutz cart · 1 via shop's site · 1 via BestPrice". */
+function splitTitle(from) {
+  if (!from.sk && !from.site) return t('allBp');
+  return [from.sk && t('viaCart', { n: from.sk }), from.site && t('viaSite', { n: from.site }), from.bp && t('viaBp', { n: from.bp })]
+    .filter(Boolean).join(' · ');
+}
+
+/**
+ * On the Skroutz only and single delivery cards: when buying some products on
+ * shops' own websites (or BestPrice) makes the order cheaper, say by how much,
+ * with a way to that result. A cheaper price is never left out silently.
+ */
+function cheaperNote(c, total) {
+  const m = c.mix;
+  if (!m || !m.wins || total - m.sol.total <= 0.004) return null;
+  return [t('cheaperElsewhere', { amount: eur(total - m.sol.total) }), ' ',
+    h('button', { class: 'link-btn', onclick: () => { state.openTab = 'overall'; renderResults(); } }, t('seeCheapest'))];
 }
 
 /** Reads BestPrice again for products whose last try failed. */
@@ -1632,14 +1685,17 @@ function retryBp(ids) {
 }
 
 function panelMix(c, ctx) {
-  if (state.bpAccess === false) return [accessNotice()];
+  // BestPrice turned on but its site cannot be read: said first; shops' own websites still count
+  const noBp = c.bpOn && state.bpAccess === false;
+  if (noBp && !c.sitesOn) return [accessNotice()];
   if (c.block) return [notice(c.block)];
+  const lead = noBp ? [accessNotice()] : [];
   const n = c.recs.length;
   // the list of matches opens by itself only when one of them needs the user
   const needsPick = c.recs.some((r) => r.status === 'error' || (!r.rec.item && (r.rec.candidates || []).length > 0));
-  const matches = n > 0 && fold('matches', needsPick || state.bpEdit != null || state.bpPaste != null, 'matches', t('matched'),
+  const matches = c.useBp && n > 0 && fold('matches', needsPick || state.bpEdit != null || state.bpPaste != null, 'matches', t('matched'),
     c.real.map(matchRow));
-  const shell = (title, note) => [h('article', { class: 'result' },
+  const shell = (title, note) => [...lead, h('article', { class: 'result' },
     h('div', { class: 'r-head' }, h('div', {},
       h('div', { class: 'r-kicker' }, t('withBp')),
       h('div', { class: 'r-title' }, title))),
@@ -1647,19 +1703,19 @@ function panelMix(c, ctx) {
     matches)];
 
   const tab = c.tabs.overall;
-  if (c.busy || !tab) return shell(dots(t('searchingBp')));
+  if (c.busy || !tab) return shell(dots(t(c.busy ? 'searchingBp' : 'calculating')));
   if (tab.block) return shell(t('noTotal'), tab.block);
   if (!tab.res) return shell(dots(t('calculating')));
   if (tab.res.error) return shell(t('noTotal'), t('calcError', { msg: tab.res.error }));
 
   // some products could not be checked on BestPrice just now: the result is without them, said so with a way to try again
-  const unchecked = c.bpFailed.length > 0 && [t('someNotChecked', { n: c.bpFailed.length }), ' ',
+  const unchecked = c.useBp && c.bpFailed.length > 0 && [t('someNotChecked', { n: c.bpFailed.length }), ' ',
     h('button', { class: 'btn small', onclick: () => retryBp(c.bpFailed) }, t('retry'))];
   const mix = c.mix;
   if (mix.wins) {
-    return [resultCard({
+    return [...lead, resultCard({
       kicker: t('withBp'),
-      title: mix.from.sk ? t('split', { sk: mix.from.sk, bp: mix.from.bp }) : t('allBp'),
+      title: splitTitle(mix.from),
       sol: mix.sol,
       from: { kind: 'overall', pick: (r, now) => (now.mix && now.mix.wins ? now.mix.sol : null) },
       badge: mix.gain != null && h('span', { class: 'badge save' }, t('savesVsSk', { amount: eur(mix.gain) })),
@@ -1669,36 +1725,39 @@ function panelMix(c, ctx) {
     }, ctx)];
   }
 
-  // Nothing on BestPrice lowers the total: show what buying there would cost.
-  if (!c.priced.length) {
-    // nothing priced on BestPrice: because it could not be read just now (try again), or because nothing was found
-    if (c.bpFailed.length) {
+  // Nothing lowers the total. With BestPrice prices: show what buying there would cost.
+  if (!(c.useBp && c.priced.length)) {
+    // nothing priced on BestPrice because it could not be read just now: try again
+    if (c.useBp && c.bpFailed.length) {
       return shell(t('bpNotCheckedTitle'), [t('bpNotChecked'), ' ',
         h('button', { class: 'btn small', onclick: () => retryBp(c.bpFailed) }, t('retry'))]);
     }
-    return shell(t('noBpGain'), t('noBpFound'));
+    // what was looked at, and found no cheaper
+    return shell(t('noGain'), [c.sitesOn && t('noSiteGain'), c.useBp && t('noBpFound')].filter(Boolean).join(' '));
   }
+  const siteNote = c.sitesOn && t('noSiteGain');
   const bt = c.tabs.bestprice;
   if (!bt || (!bt.res && !bt.block)) return shell(t('noBpGain'), dots(t('calculating')));
   if (bt.block) return shell(t('noBpGain'), bt.block);
   if (bt.res.error) return shell(t('noBpGain'), t('calcError', { msg: bt.res.error }));
   const sol = bt.res.overall;
   const from = tagSources(sol, true);
-  const merchants = sol.shipments.filter((s) => s.src === 'BestPrice').length;
+  const merchants = sol.shipments.filter((s) => s.src === 'bp').length;
   const skTotal = tabTotal(c.tabs.skroutz, (r) => r.overall.total);
   const diff = skTotal == null ? null : sol.total - skTotal;
-  return [resultCard({
+  const onSk = from.sk + from.site; // what BestPrice cannot supply comes from Skroutz
+  return [...lead, resultCard({
     kicker: t('cheapestBp'),
-    title: count(merchants, 'merchant') + (from.sk ? ` · ${t('nFromSk', { n: from.sk })}` : ''),
+    title: count(merchants, 'merchant') + (onSk ? ` · ${t('nFromSk', { n: onSk })}` : ''),
     sol,
     badge: diff == null ? null : diff > 0.004
       ? h('span', { class: 'badge warn' }, t('skOnlyCheaper', { amount: eur(diff) }))
       : h('span', { class: 'badge win' }, t('sameAsSkOnly')),
-    note: unchecked,
+    note: (unchecked || siteNote) && [siteNote, siteNote && unchecked && ' ', ...(unchecked || [])],
     warn: stoppedNote('bestprice', bt, sol),
     noCart: true, // more expensive than Skroutz only: nothing to buy from here
     extra: matches,
-  }, { ...ctx, mark: (it, s) => s.src === 'Skroutz' && bpGap(it.productId) })];
+  }, { ...ctx, mark: (it, s) => s.src !== 'bp' && bpGap(it.productId) })];
 }
 
 function renderResults() {
@@ -1709,7 +1768,6 @@ function renderResults() {
   const c = compute();
   const sk = c.tabs.skroutz;
   const ov = c.tabs.overall;
-  const bt = c.tabs.bestprice;
   const calcBusy = (tab) => !!c.wait || (!c.block && (!tab || (!tab.block && !tab.res)));
   const noAccess = state.bpAccess === false;
   const n = c.recs.length;
@@ -1717,21 +1775,24 @@ function renderResults() {
   // why a tab has no total (its tooltip)
   const blocked = (tab) => (typeof c.block === 'string' ? c.block : tab && typeof tab.block === 'string' ? tab.block : null);
 
-  // With BestPrice: the saving if there is one, otherwise what buying on BestPrice would cost
+  // Cheapest overall (shops' own websites and/or BestPrice): the saving if there is one,
+  // otherwise what buying on BestPrice would cost, or that nothing is cheaper
   let mixTab = null;
-  if (c.bpOn) {
-    mixTab = { key: 'overall', label: t('tabMix'), busy: !noAccess && (c.busy || calcBusy(ov)), stale: !!(ov && ov.stale),
-      why: noAccess ? t('access1') : blocked(ov) };
+  // BestPrice is all this tab uses, and its site cannot be read
+  const onlyBpNoAccess = noAccess && !c.sitesOn;
+  if (c.allOn) {
+    mixTab = { key: 'overall', label: t('tabMix'), busy: !onlyBpNoAccess && (c.busy || calcBusy(ov)), stale: !!(ov && ov.stale),
+      why: onlyBpNoAccess ? t('access1') : blocked(ov) };
     if (mix && mix.wins) mixTab.sol = mix.sol;
-    else if (mix && !c.priced.length && c.bpFailed.length) { mixTab.text = t('bpNotCheckedShort'); mixTab.why = t('bpNotChecked'); }
-    else if (mix && !c.priced.length) { mixTab.text = t('notOnBpShort'); mixTab.why = t('noBpFound'); }
-    else if (mix) {
-      mixTab.sol = tabTotal(bt, (r) => r.overall);
-      mixTab.busy = !mixTab.sol && calcBusy(bt);
-      mixTab.stale = mixTab.stale || !!(bt && bt.stale);
-      mixTab.why = blocked(bt) || mixTab.why;
-      mixTab.src = bt;
-      mixTab.totalTip = t('bpPlanTip');
+    else if (mix && c.useBp && !c.priced.length && c.bpFailed.length) { mixTab.text = t('bpNotCheckedShort'); mixTab.why = t('bpNotChecked'); }
+    else if (mix && !(c.useBp && c.priced.length)) {
+      mixTab.text = t('noGainShort');
+      mixTab.why = [c.sitesOn && t('noSiteGain'), c.useBp && t('noBpFound')].filter(Boolean).join(' ');
+    } else if (mix) {
+      // Nothing beats Skroutz only: the tab says so (a dearer total under "Cheapest overall"
+      // would mislead); opening it shows what buying on BestPrice would cost, to compare.
+      mixTab.text = t('noGainShort');
+      mixTab.why = t('bpPlanTip');
     }
   }
   const tabs = [
@@ -1747,7 +1808,7 @@ function renderResults() {
     tab.tip = tab.why || '';
     if (tab.text) continue;
     const src = tab.src || (tab.key === 'overall' ? ov : sk);
-    tab.text = tab.key === 'overall' && noAccess ? t('noAccessShort')
+    tab.text = tab.key === 'overall' && onlyBpNoAccess ? t('noAccessShort')
       : (src && src.reason === 'filter') ? t('checkSettings')
       : (src && src.reason === 'short') ? t('lowerQty')
       : tab.key === 'single' && !c.block && !(src && src.block) ? t('notPossible')
@@ -1794,6 +1855,8 @@ function renderResults() {
     url: (it, s) => {
       const item = byId[it.productId] || { id: it.productId };
       if (s.key.startsWith('sbp')) return it.url || (state.bp[item.id] && state.bp[item.id].item && state.bp[item.id].item.url) || productUrl(item);
+      // the shop's own website, through Skroutz's link to it ("Δες το στο κατάστημα")
+      if (s.key.startsWith('sw')) return it.url || productUrl(item);
       const base = productUrl(item);
       return it.cardId ? `${base}${base.includes('?') ? '&' : '?'}product_id=${it.cardId}` : base;
     },
@@ -1895,6 +1958,8 @@ async function init() {
     render();
     if (e.target.checked) loadAllBp();
   });
+  $('sites-on').checked = sitesOn();
+  $('sites-on').addEventListener('change', (e) => { state.settings.shopSites = e.target.checked; saveSettings(); render(); });
   $('avail').value = state.settings.avail || 'any';
   $('avail').addEventListener('change', (e) => { state.settings.avail = e.target.value; saveSettings(); render(); });
   $('max-days').value = String(+state.settings.maxDays || 0);

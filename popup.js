@@ -56,11 +56,17 @@ const productUrl = (item) => (isPh(item) ? item.bpItem.url : item.url || `${ORIG
 // ---------- storage ----------
 async function load() {
   const [data, session] = await Promise.all([
-    chrome.storage.local.get(['cart', 'cartRev', 'settings', 'offers', 'history', 'bp', 'calc']),
+    chrome.storage.local.get(['cart', 'cartRev', 'settings', 'offers', 'history', 'bp', 'calc', 'cartJob', 'cartResult']),
     // products the background is looking up right now (added from a page a moment ago)
     chrome.storage.session.get('lookups').catch(() => ({})),
   ]);
   state.bgLookups = (session && session.lookups) || {};
+  // An order that no Skroutz cart page took in time (3 minutes, see content.js),
+  // or a summary that was not shown: no longer used, so deleted (PRIVACY.md).
+  const unused = [];
+  if (data.cartJob && !(Date.now() - data.cartJob.ts <= 3 * 60000)) unused.push('cartJob');
+  if (data.cartResult && !(Date.now() - data.cartResult.ts <= 120000)) unused.push('cartResult');
+  if (unused.length) chrome.storage.local.remove(unused);
   // results saved by this version (the calculation may differ in another)
   state.calcCache = (data.calc && data.calc.ver === chrome.runtime.getManifest().version && data.calc.tabs) || {};
   state.history = Array.isArray(data.history) ? data.history : [];
@@ -78,9 +84,10 @@ async function load() {
     if (!rec) continue;
     if (rec.v === BP_VER) { state.bp[id] = rec; continue; }
     older = true;
-    if (!(rec.v >= 3 && rec.v < BP_VER)) continue;
-    const r = oldMatch(id, rec, names[id]);
+    if (!(rec.v < BP_VER)) continue; // from a newer version: left as it is
+    const r = rec.v >= 3 ? oldMatch(id, rec, names[id]) : { rec: null, back: null };
     if (r.rec) state.bp[id] = r.rec;
+    else dropped.bp.add(id); // looked for again: the old match goes from storage too
     if (r.back) back.set(id, r.back);
   }
   // A Skroutz product that may have replaced one added from BestPrice, which
@@ -113,7 +120,10 @@ async function load() {
 
   Object.assign(state.settings, data.settings || {});
   state.offers = {};
-  for (const [id, o] of Object.entries(data.offers || {})) if (o && o.v === OFFERS_VER) state.offers[id] = o;
+  for (const [id, o] of Object.entries(data.offers || {})) {
+    if (o && o.v === OFFERS_VER) state.offers[id] = o;
+    else if (!(o && o.v > OFFERS_VER)) dropped.offers.add(id); // an older format: read again, and taken out of storage
+  }
   fixNames();
 }
 
@@ -287,6 +297,9 @@ const saveSettings = () => chrome.storage.local.set({ settings: state.settings }
 // read or saved them goes in, and what changed elsewhere stays. When both
 // changed the same product, the newer prices win (and a match the user chose).
 const syncedMaps = { offers: {}, bp: {} }; // as stored when this window last read or saved them
+// entries this window took out on purpose (saved by an older version, see load):
+// taken out of storage too at the next save, unless changed elsewhere meanwhile
+const dropped = { offers: new Set(), bp: new Set() };
 const newer = {
   offers: (m, t) => ((t.ts || 0) > (m.ts || 0) ? t : m),
   bp: (m, t) => (m.manual ? m : t.manual ? t : (t.offersTs || 0) > (m.offersTs || 0) ? t : m),
@@ -307,10 +320,14 @@ function saveMap(key, mine, keep) {
         : newer[key](m, t);                                         // changed on both sides
       if (v !== undefined) out[id] = v;
     }
+    for (const id of dropped[key]) {
+      if (mine[id] === undefined && canon(theirs[id]) === canon(base[id])) delete out[id];
+    }
     const ids = keep(stored);
     for (const id of Object.keys(out)) if (!ids.has(id)) delete out[id];
     syncedMaps[key] = copy(out); // before the save: its report must find it
     await chrome.storage.local.set({ [key]: out });
+    dropped[key].clear();
   });
 }
 const idsOf = (lists) => new Set(lists.flat().map((p) => p.id));
@@ -376,7 +393,7 @@ async function readOffers(id) {
     saveOffers();
   } catch (e) {
     state.status[id] = 'error';
-    console.warn('CartWise:', id, e);
+    console.warn('Eksipno Kalathi:', id, e);
   }
   render();
 }
@@ -436,7 +453,7 @@ async function loadBp(id, force = false) {
   } catch (e) {
     if (replaced()) return;
     state.bpStatus[id] = 'error';
-    console.warn('CartWise (BestPrice):', id, e);
+    console.warn('Eksipno Kalathi (BestPrice):', id, e);
   }
   renderResults();
 }
@@ -564,7 +581,7 @@ async function resolvePh(phId) {
     delete state.phStatus[phId];
   } catch (e) {
     state.phStatus[phId] = 'error';
-    console.warn('CartWise (Skroutz search):', phId, e);
+    console.warn('Eksipno Kalathi (Skroutz search):', phId, e);
   }
   render();
 }
@@ -829,6 +846,7 @@ function saveSnapshot() {
     q('#panel').hidden = true;
     q('#panel').replaceChildren();
     q('#add-msg').hidden = true;
+    q('#sk-access').hidden = true; // checked again on every opening
     q('#welcome').hidden = !!state.settings.welcomed; // the guide opens by itself only until it is dismissed
     for (const b of app.querySelectorAll('#tabs .tab')) b.setAttribute('aria-expanded', 'false');
     try {
@@ -1009,7 +1027,7 @@ async function sendToSkroutzCart(items, empty) {
   if (!items.length) return;
   skCart = null; // that cart is about to change
   await chrome.storage.local.set({ cartJob: { ts: Date.now(), items, empty: !!empty } });
-  chrome.tabs.create({ url: `${ORIGIN}/cart#cartwise` });
+  chrome.tabs.create({ url: `${ORIGIN}/cart#eksipno-kalathi` });
 }
 
 /**
@@ -1379,6 +1397,9 @@ function compute() {
       || (r.rec.item && !r.rec.offers && r.status === 'loading'));
   // products with BestPrice prices: those matched there, and those added from there
   c.priced = state.cart.map((item) => state.bp[item.id] || {}).filter((rec) => rec.item && rec.offers && rec.offers.length);
+  // products whose BestPrice prices could not be read just now (not "not found": not checked)
+  // (a product that keeps prices read before is not among them: those are used, marked "not updated")
+  c.bpFailed = c.recs.filter((r) => r.status === 'error' && !(r.rec.item && r.rec.offers && r.rec.offers.length)).map((r) => r.item.id);
   if (c.block) return c;
 
   const list = state.cart.map((item) => ({ item, ...sources(item) }));
@@ -1519,6 +1540,8 @@ function accessNotice() {
 /** Why a product is bought from Skroutz in the BestPrice result, as a small badge. */
 function bpGap(id) {
   const rec = state.bp[id] || {};
+  // its BestPrice prices could not be read just now: not checked, rather than not there
+  if (state.bpStatus[id] === 'error' && !(rec.item && rec.offers && rec.offers.length)) return h('span', { class: 'badge warn avail' }, t('notCheckedShort'));
   const [text, cls] = !rec.item
     ? ((rec.candidates || []).length ? [t('notSure'), 'warn'] : [t('notFound'), 'bad'])
     : rec.offers && !rec.offers.length ? [t('noMerchants'), 'bad'] : [t('noFitShort'), 'warn'];
@@ -1589,6 +1612,11 @@ function mixState(c) {
   return { sol, from, gain, wins: from.bp > 0 && (gain == null || gain > 0.004) };
 }
 
+/** Reads BestPrice again for products whose last try failed. */
+function retryBp(ids) {
+  for (const id of ids) loadBp(id, true);
+}
+
 function panelMix(c, ctx) {
   if (state.bpAccess === false) return [accessNotice()];
   if (c.block) return [notice(c.block)];
@@ -1610,6 +1638,9 @@ function panelMix(c, ctx) {
   if (!tab.res) return shell(dots(t('calculating')));
   if (tab.res.error) return shell(t('noTotal'), t('calcError', { msg: tab.res.error }));
 
+  // some products could not be checked on BestPrice just now: the result is without them, said so with a way to try again
+  const unchecked = c.bpFailed.length > 0 && [t('someNotChecked', { n: c.bpFailed.length }), ' ',
+    h('button', { class: 'btn small', onclick: () => retryBp(c.bpFailed) }, t('retry'))];
   const mix = c.mix;
   if (mix.wins) {
     return [resultCard({
@@ -1618,13 +1649,21 @@ function panelMix(c, ctx) {
       sol: mix.sol,
       from: { kind: 'overall', pick: (r, now) => (now.mix && now.mix.wins ? now.mix.sol : null) },
       badge: mix.gain != null && h('span', { class: 'badge save' }, t('savesVsSk', { amount: eur(mix.gain) })),
+      note: unchecked,
       warn: stoppedNote('overall', tab, mix.sol),
       extra: matches,
     }, ctx)];
   }
 
   // Nothing on BestPrice lowers the total: show what buying there would cost.
-  if (!c.priced.length) return shell(t('noBpGain'), t('noBpFound'));
+  if (!c.priced.length) {
+    // nothing priced on BestPrice: because it could not be read just now (try again), or because nothing was found
+    if (c.bpFailed.length) {
+      return shell(t('bpNotCheckedTitle'), [t('bpNotChecked'), ' ',
+        h('button', { class: 'btn small', onclick: () => retryBp(c.bpFailed) }, t('retry'))]);
+    }
+    return shell(t('noBpGain'), t('noBpFound'));
+  }
   const bt = c.tabs.bestprice;
   if (!bt || (!bt.res && !bt.block)) return shell(t('noBpGain'), dots(t('calculating')));
   if (bt.block) return shell(t('noBpGain'), bt.block);
@@ -1641,6 +1680,7 @@ function panelMix(c, ctx) {
     badge: diff == null ? null : diff > 0.004
       ? h('span', { class: 'badge warn' }, t('skOnlyCheaper', { amount: eur(diff) }))
       : h('span', { class: 'badge win' }, t('sameAsSkOnly')),
+    note: unchecked,
     warn: stoppedNote('bestprice', bt, sol),
     noCart: true, // more expensive than Skroutz only: nothing to buy from here
     extra: matches,
@@ -1669,6 +1709,7 @@ function renderResults() {
     mixTab = { key: 'overall', label: t('tabMix'), busy: !noAccess && (c.busy || calcBusy(ov)), stale: !!(ov && ov.stale),
       why: noAccess ? t('access1') : blocked(ov) };
     if (mix && mix.wins) mixTab.sol = mix.sol;
+    else if (mix && !c.priced.length && c.bpFailed.length) { mixTab.text = t('bpNotCheckedShort'); mixTab.why = t('bpNotChecked'); }
     else if (mix && !c.priced.length) { mixTab.text = t('notOnBpShort'); mixTab.why = t('noBpFound'); }
     else if (mix) {
       mixTab.sol = tabTotal(bt, (r) => r.overall);
@@ -1766,16 +1807,43 @@ function renderAddCurrent() {
 }
 
 function render() {
+  renderSkAccess();
   renderAddCurrent();
   renderProducts();
   renderResults();
+}
+
+// ---------- access to skroutz.gr ----------
+// Chrome lets the user turn an extension's site access off ("On click"). For
+// skroutz.gr that stops everything (prices, the page button), so it is said
+// at the top, with a way to allow it again (as for bestprice.gr, see accessNotice).
+const SK_ACCESS = { origins: ['https://www.skroutz.gr/*'] };
+async function checkSkAccess() {
+  try { state.skAccess = await chrome.permissions.contains(SK_ACCESS); } catch { state.skAccess = true; }
+}
+function renderSkAccess() {
+  const box = $('sk-access');
+  box.hidden = state.skAccess !== false;
+  if (box.hidden) return;
+  update(box,
+    h('p', {}, state.skAccessErr ? t('skAccessErr') : t('skAccess')),
+    h('button', {
+      class: 'btn small', type: 'button',
+      // straight from the click: the browser asks only then
+      onclick: () => chrome.permissions.request(SK_ACCESS).then((ok) => {
+        state.skAccess = ok;
+        state.skAccessErr = !ok;
+        render();
+        if (ok) { state.status = {}; loadAll(true); }
+      }, () => { state.skAccessErr = true; render(); }),
+    }, t('allow')));
 }
 
 // ---------- wiring ----------
 async function init() {
   // everything the first drawing needs, read at the same time
   const tabQuery = chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
-  await Promise.all([load(), checkBpAccess()]);
+  await Promise.all([load(), checkBpAccess(), checkSkAccess()]);
   setLang(state.settings.lang || defaultLang());
   applyStatic(document);
   for (const r of document.querySelectorAll('input[name="lang"]')) {

@@ -1,4 +1,4 @@
-# CartWise for Skroutz
+# Eksipno Kalathi
 
 A Chrome / Edge extension that finds the cheapest way to buy a list of skroutz.gr products.
 
@@ -14,7 +14,7 @@ For the products in your list it reads the price of every store (including offer
 - Each offer goes in as one piece and then gets its quantity, never above what the store has (the note on the cart page then says "only N available"; the results already use only stores that sell the whole quantity, so this happens only when a store's limit dropped since the prices were read). Asking Skroutz for more than a store has would make it pick another store.
 - With **empty the rest** ticked, the other products are removed one by one before the order goes in, including ones that this result buys on BestPrice. The order's own products already in the cart stay. Skroutz's own "Remove all" is used only if a product cannot be removed and none of the order's products is in the cart. If the cart cannot be read at all, nothing is removed. The note lists what was removed.
 - A product moved to another shop gets its quantity back if the move does not happen.
-- The order runs on the cart page the popup opens. If Skroutz first shows its "checking your browser" page and the address loses its #cartwise on the way, it runs on the next cart page within 3 minutes. While Skroutz is slow to open the cart, a note says CartWise is waiting; if the cart does not open, the note says so (reloading the page within a few minutes tries again). An order confirmed longer ago is not run, and the note says so.
+- The order runs on the cart page the popup opens. If Skroutz first shows its "checking your browser" page and the address loses its #eksipno-kalathi on the way, it runs on the next cart page within 3 minutes. While Skroutz is slow to open the cart, a note says Eksipno Kalathi is waiting; if the cart does not open, the note says so (reloading the page within a few minutes tries again). An order confirmed longer ago is not run, and the note says so.
 - While a result is being recalculated (the list just changed), its button waits for the new result. Pressing **Add to cart** in the question checks once more that the result for the list, its prices and the settings as they are now is still the same (every product, quantity, shop and offer, every price and shipping fee, BestPrice ones included, and the total, compared in whole cents). If not, nothing is sent: the question shows the updated order and its amount instead, and nothing is added until you confirm that one.
 - Products whose store asks for a size or option first (clothes, shoes...) are not added: the window and the note list them, to add from their page, and the window leaves them out of its count and amount. One already in the cart keeps the size chosen for it.
 - A product you had unticked in the Skroutz cart is ticked again, so it is part of the checkout. If it stays unticked, it is not counted as added, and the note asks you to tick it.
@@ -28,7 +28,7 @@ For the products in your list it reads the price of every store (including offer
 ## Use
 
 - Open a product page on skroutz.gr or bestprice.gr, open the popup and press **Add this page's product**.
-  Both sites also get a floating **+ Add to CartWise** button at the bottom left of product pages.
+  Both sites also get a floating **+ Add to Eksipno Kalathi** button at the bottom left of product pages.
 - A product added with the page button is priced and looked up on BestPrice right away in the background, so the totals are ready when you open the popup.
 - A product added from BestPrice is looked up on Skroutz; if the extension is not sure which Skroutz product it is, it asks you to choose. When it picks one by itself, **Undo** brings the BestPrice product back, with the Skroutz products found as the ones to choose from.
 - The sliders button opens the settings: **I have Skroutz Plus**, **Compare with BestPrice**, **Skroutz Point / Home** delivery and **Language** (English / Ελληνικά; the default follows the browser).
@@ -39,7 +39,8 @@ For the products in your list it reads the price of every store (including offer
 - A product that Skroutz does not sell is priced from BestPrice, and its line is marked BestPrice.
 - Clicking **Products** folds the product list away (and back) to save space.
 - Every product takes one line. When two products start with the same words (e.g. two lengths of the same cable), the shared part is cut so the difference shows: "Anker 322 … 0.9m A81H5G11". The full name is in the tooltip.
-- **Matched products** (With BestPrice tab) lists each product's cheapest BestPrice price, or "not found".
+- **Matched products** (With BestPrice tab) lists each product's cheapest BestPrice price, or "not found". If BestPrice could not be read at that moment, the tab says "Not checked", with **Retry**, instead of claiming the products are not there.
+- If the browser's site access for skroutz.gr is turned off (the extensions menu allows that), the popup says so at the top, with **Allow access**: without it no prices can be read and the page button does not show.
 - The popup opens as it looked last time and keeps the totals on screen while prices are read again, so it does not flicker.
 - **Undo** takes back the last change to the list (add, remove, quantity, empty); **Empty cart** removes everything.
 - The round arrow re-reads prices (they are cached for 15 minutes).
@@ -74,5 +75,5 @@ These are the rules Skroutz shows on its product pages and help centre; the fina
 - `lib/i18n.js` – English and Greek text. `_locales/` – the extension name and description for the browser.
 - `background.js`, `offscreen.*` – the background lookup for products added with the page button (`lib/skroutz.js` reads Skroutz pages for it and for the popup).
 - `popup.*` – the popup. `content.*` – the button on product pages, and the step that puts the chosen offers in the Skroutz cart.
-- `pack.ps1` – makes `dist/cartwise-<version>.zip`, the file to upload to the Chrome Web Store and Edge Add-ons. `store/` – store logos and what to fill in when publishing (`store/STORE.md`).
+- `pack.ps1` – makes `dist/eksipno-kalathi-<version>.zip`, the file to upload to the Chrome Web Store and Edge Add-ons. `store/` – store logos and what to fill in when publishing (`store/STORE.md`).
 - `icon.svg`, `icon-16.svg` – the icon's source; the PNGs in `icons/` and `store/` are made from them (`icon-16.svg` is the 16 px toolbar size, without the arrow).

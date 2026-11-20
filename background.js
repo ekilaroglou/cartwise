@@ -1,4 +1,4 @@
-// The background part of CartWise. Only a page's "+ Add to CartWise" button
+// The background part of Eksipno Kalathi. Only a page's "+ Add to Eksipno Kalathi" button
 // wakes it (other changes to the saved data do not):
 //   * it makes the change to the list, one change after another (under a lock
 //     the popup takes too), so two pages adding at the same moment, or a page
@@ -133,7 +133,7 @@ async function run() {
       try {
         await lookOne(p);
       } catch (e) {
-        console.warn('CartWise background lookup:', p.id, e); // the popup reads it when it opens
+        console.warn('Eksipno Kalathi background lookup:', p.id, e); // the popup reads it when it opens
       } finally {
         await mark(p.id, false);
       }

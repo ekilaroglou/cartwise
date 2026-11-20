@@ -1,4 +1,4 @@
-// Adds a floating "Add to CartWise" button on skroutz.gr and bestprice.gr product pages.
+// Adds a floating "Add to Eksipno Kalathi" button on skroutz.gr and bestprice.gr product pages.
 (() => {
   const BP = location.hostname.endsWith('bestprice.gr');
   const PRODUCT_PATH = BP ? /^\/item\/(\d+)\// : /^\/s\/(\d+)\//;
@@ -14,8 +14,8 @@
   const alive = () => !!(chrome.runtime && chrome.runtime.id); // false after the extension is reloaded
   // Same language as the popup (settings.lang), else the browser's.
   const TEXT = {
-    en: { add: '+ Add to CartWise', inList: (n) => `✓ In CartWise (${n})`, addTitle: 'Add this product to your CartWise list', removeTitle: 'Click to remove from your CartWise list' },
-    el: { add: '+ Προσθήκη στο CartWise', inList: (n) => `✓ Στο CartWise (${n})`, addTitle: 'Πρόσθεσε αυτό το προϊόν στη λίστα του CartWise', removeTitle: 'Πάτησε για αφαίρεση από τη λίστα του CartWise' },
+    en: { add: '+ Add to Eksipno Kalathi', inList: (n) => `✓ In Eksipno Kalathi (${n})`, addTitle: 'Add this product to your Eksipno Kalathi list', removeTitle: 'Click to remove from your Eksipno Kalathi list' },
+    el: { add: '+ Προσθήκη στο Eksipno Kalathi', inList: (n) => `✓ Στο Eksipno Kalathi (${n})`, addTitle: 'Πρόσθεσε αυτό το προϊόν στη λίστα του Eksipno Kalathi', removeTitle: 'Πάτησε για αφαίρεση από τη λίστα του Eksipno Kalathi' },
   };
   const pageName = () => (document.querySelector('h1')?.textContent || og('title') || document.title.split('|')[0] || '').replace(/\s+/g, ' ').trim();
 
@@ -73,7 +73,7 @@
     } catch (e) {
       // the background did not get the request: make the change here
       if (/Receiving end does not exist|Could not establish connection/i.test(String(e && e.message))) await toggleHere(id, item);
-      else console.warn('CartWise:', e);
+      else console.warn('Eksipno Kalathi:', e);
     }
     mem = null;
     update(true);
@@ -110,15 +110,15 @@
 
   // ---------- "Add to Skroutz cart" (started from the popup) ----------
   // The popup saves the chosen offers as `cartJob` ({items, empty}) and opens
-  // skroutz.gr/cart#cartwise. Here, on that page, the cart is changed with the
+  // skroutz.gr/cart#eksipno-kalathi. Here, on that page, the cart is changed with the
   // same requests the site's own buttons make, so it is the visitor's own cart.
   // The Skroutz cart holds one line per product: adding a product that is
   // already there from another shop moves that line to the new shop.
   const CART_TEXT = {
     en: {
-      adding: (a, b) => `CartWise: adding to your cart… ${a} / ${b}`,
-      emptying: (a, b) => `CartWise: removing the other products… ${a} / ${b}`,
-      done: (n) => `CartWise added ${n} ${n === 1 ? 'product' : 'products'} to your cart.`,
+      adding: (a, b) => `Eksipno Kalathi: adding to your cart… ${a} / ${b}`,
+      emptying: (a, b) => `Eksipno Kalathi: removing the other products… ${a} / ${b}`,
+      done: (n) => `Eksipno Kalathi added ${n} ${n === 1 ? 'product' : 'products'} to your cart.`,
       removed: (n, list) => `Removed ${n} other ${n === 1 ? 'product' : 'products'}${list ? ':' : '.'}`,
       more: (n) => `• and ${n} more`,
       notRemoved: (n) => `${n} other ${n === 1 ? 'product' : 'products'} could not be removed.`,
@@ -130,15 +130,15 @@
       inCart: (name, n) => `${name}: ${n} in your cart`,
       otherShop: (name) => `${name}: in your cart from another shop`,
       unticked: 'In your cart but not ticked, so left out at checkout. Tick them in the cart:',
-      waiting: 'CartWise: waiting for Skroutz to open your cart…',
-      notLoaded: 'CartWise could not add your order: Skroutz did not open your cart in time. Reload this page within a few minutes to try again.',
-      tooOld: 'CartWise did not add the order: it was confirmed more than 3 minutes ago, and prices may have changed since. Press “Add to Skroutz cart” in CartWise again.',
+      waiting: 'Eksipno Kalathi: waiting for Skroutz to open your cart…',
+      notLoaded: 'Eksipno Kalathi could not add your order: Skroutz did not open your cart in time. Reload this page within a few minutes to try again.',
+      tooOld: 'Eksipno Kalathi did not add the order: it was confirmed more than 3 minutes ago, and prices may have changed since. Press “Add to Skroutz cart” in Eksipno Kalathi again.',
       close: 'Close',
     },
     el: {
-      adding: (a, b) => `CartWise: προσθήκη στο καλάθι σου… ${a} / ${b}`,
-      emptying: (a, b) => `CartWise: αφαίρεση των άλλων προϊόντων… ${a} / ${b}`,
-      done: (n) => `Το CartWise πρόσθεσε ${n} ${n === 1 ? 'προϊόν' : 'προϊόντα'} στο καλάθι σου.`,
+      adding: (a, b) => `Eksipno Kalathi: προσθήκη στο καλάθι σου… ${a} / ${b}`,
+      emptying: (a, b) => `Eksipno Kalathi: αφαίρεση των άλλων προϊόντων… ${a} / ${b}`,
+      done: (n) => `Το Eksipno Kalathi πρόσθεσε ${n} ${n === 1 ? 'προϊόν' : 'προϊόντα'} στο καλάθι σου.`,
       removed: (n, list) => (n === 1 ? 'Αφαιρέθηκε 1 άλλο προϊόν' : `Αφαιρέθηκαν ${n} άλλα προϊόντα`) + (list ? ':' : '.'),
       more: (n) => `• και ${n} ακόμη`,
       notRemoved: (n) => (n === 1 ? '1 άλλο προϊόν δεν αφαιρέθηκε.' : `${n} άλλα προϊόντα δεν αφαιρέθηκαν.`),
@@ -150,16 +150,16 @@
       inCart: (name, n) => `${name}: ${n} στο καλάθι σου`,
       otherShop: (name) => `${name}: στο καλάθι σου από άλλο κατάστημα`,
       unticked: 'Στο καλάθι σου αλλά χωρίς τικ, οπότε μένουν έξω από την παραγγελία. Τσέκαρέ τα στο καλάθι:',
-      waiting: 'CartWise: περιμένω να ανοίξει το καλάθι σου στο Skroutz…',
-      notLoaded: 'Το CartWise δεν πρόσθεσε την παραγγελία σου: το Skroutz δεν άνοιξε το καλάθι σου εγκαίρως. Ανανέωσε αυτή τη σελίδα μέσα στα επόμενα λεπτά για να ξαναδοκιμάσει.',
-      tooOld: 'Το CartWise δεν πρόσθεσε την παραγγελία: επιβεβαιώθηκε πριν από πάνω από 3 λεπτά και οι τιμές μπορεί να άλλαξαν. Πάτησε ξανά «Προσθήκη στο καλάθι του Skroutz» στο CartWise.',
+      waiting: 'Eksipno Kalathi: περιμένω να ανοίξει το καλάθι σου στο Skroutz…',
+      notLoaded: 'Το Eksipno Kalathi δεν πρόσθεσε την παραγγελία σου: το Skroutz δεν άνοιξε το καλάθι σου εγκαίρως. Ανανέωσε αυτή τη σελίδα μέσα στα επόμενα λεπτά για να ξαναδοκιμάσει.',
+      tooOld: 'Το Eksipno Kalathi δεν πρόσθεσε την παραγγελία: επιβεβαιώθηκε πριν από πάνω από 3 λεπτά και οι τιμές μπορεί να άλλαξαν. Πάτησε ξανά «Προσθήκη στο καλάθι του Skroutz» στο Eksipno Kalathi.',
       close: 'Κλείσιμο',
     },
   };
   // What a finished job did: kept in the extension's own storage (not the
   // site's) until the reloaded cart page, marked with DONE_HASH, shows it.
   const RESULT_KEY = 'cartResult';
-  const DONE_HASH = '#cartwise-done';
+  const DONE_HASH = '#eksipno-kalathi-done';
   const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function cartBox(lines, closable) {
@@ -259,7 +259,7 @@
       if (!res.ok) return false;
       try { return (await cartLines(call)).length === 0; } catch { return true; } // trust the site's answer
     } catch (e) {
-      console.warn('CartWise: Remove all failed', e);
+      console.warn('Eksipno Kalathi: Remove all failed', e);
       return false;
     }
   }
@@ -296,17 +296,20 @@
   }
 
   // An order confirmed in the popup runs on the cart page the popup opens
-  // (#cartwise), or on the next cart page within a few minutes: Skroutz's
-  // "checking your browser" page can lose the #cartwise on its way to the cart.
+  // (#eksipno-kalathi), or on the next cart page within a few minutes: Skroutz's
+  // "checking your browser" page can lose the #eksipno-kalathi on its way to the cart.
   const JOB_FRESH = 3 * 60000;
 
-  /** Takes the order for this page, unless another cart tab has taken it already. */
+  /**
+   * Takes the order for this page: "ok"; "gone" when another cart tab has taken
+   * it already; "old" when it has run out while the page was waited for.
+   */
   async function claimJob(ts) {
     const take = async () => {
       const { cartJob } = await chrome.storage.local.get('cartJob');
-      if (!cartJob || cartJob.ts !== ts) return false;
+      if (!cartJob || cartJob.ts !== ts) return 'gone';
       await chrome.storage.local.remove('cartJob');
-      return true;
+      return Date.now() - cartJob.ts > JOB_FRESH ? 'old' : 'ok';
     };
     // cart tabs share this lock (the same site), so two of them cannot both take it
     return navigator.locks ? navigator.locks.request('cartwise-cart-job', take) : take();
@@ -316,7 +319,7 @@
     if (BP || location.pathname !== '/cart' || !alive()) return;
     const { text } = await read();
     const T = CART_TEXT[text === TEXT.el ? 'el' : 'en'];
-    const asked = location.hash === '#cartwise'; // the page the popup opened
+    const asked = location.hash === '#eksipno-kalathi'; // the page the popup opened
     if (asked || location.hash === DONE_HASH) history.replaceState(null, '', location.pathname + location.search);
 
     // After the reload that follows a finished order: say what happened, once
@@ -342,7 +345,10 @@
       await pause(1000);
     }
     if (!token) { cartBox([T.notLoaded], T.close); return; }
-    if (!(await claimJob(cartJob.ts))) return; // never run twice
+    // never run twice, and never once it has run out (checked again: the wait above can take a minute)
+    const claim = await claimJob(cartJob.ts);
+    if (claim === 'old') { cartBox([T.tooOld], T.close); return; }
+    if (claim !== 'ok') return;
 
     const call = cartApi(token);
     const items = cartJob.items;
@@ -350,7 +356,7 @@
     const result = { ok: 0, failed: [], fewer: [], more: [], otherShop: [], choice: [], removed: [], notRemoved: 0, unticked: [] };
     let before = null; // what the cart held before
     for (let i = 0; i < 3 && !before; i++) {
-      try { before = await cartLines(call); } catch (e) { console.warn('CartWise: could not read the cart', e); if (i < 2) await pause(1500); }
+      try { before = await cartLines(call); } catch (e) { console.warn('Eksipno Kalathi: could not read the cart', e); if (i < 2) await pause(1500); }
     }
 
     // "Empty the rest", before the order goes in: the other products one by
@@ -374,7 +380,7 @@
             result.removed.push(names[i]);
           } catch (e) {
             left.push(i);
-            console.warn('CartWise: could not remove line', rest[i].id, e);
+            console.warn('Eksipno Kalathi: could not remove line', rest[i].id, e);
           }
         }
         if (left.length) {
@@ -397,13 +403,13 @@
         if (!done) skipped.add(items[i].sku);
       } catch (e) {
         errors.add(items[i].sku);
-        console.warn('CartWise:', items[i].name, e);
+        console.warn('Eksipno Kalathi:', items[i].name, e);
       }
     }
 
     // what the cart holds now, product by product
     let after = null;
-    try { after = await cartLines(call); } catch (e) { console.warn('CartWise: could not read the cart', e); }
+    try { after = await cartLines(call); } catch (e) { console.warn('Eksipno Kalathi: could not read the cart', e); }
     const unticked = [];
     for (const item of items) {
       const l = after && after.find((x) => x.sku === item.sku);
@@ -425,9 +431,9 @@
           selected: true, line_item_ids: unticked.map((u) => u.l.id), proposal_product_ids: Object.fromEntries(after.map((l) => [l.id, l.pid])),
         }, 'PATCH');
         ticked = true;
-      } catch (e) { console.warn('CartWise: could not tick', e); }
+      } catch (e) { console.warn('Eksipno Kalathi: could not tick', e); }
       let now = null;
-      try { now = await cartLines(call); } catch (e) { console.warn('CartWise: could not read the cart', e); }
+      try { now = await cartLines(call); } catch (e) { console.warn('Eksipno Kalathi: could not read the cart', e); }
       for (const { l, item } of unticked) {
         // the cart could not be read again: the answer to the request is all there is
         const selected = now ? !!now.find((x) => x.id === l.id && x.selected) : ticked;
@@ -439,7 +445,7 @@
     history.replaceState(null, '', location.pathname + location.search + DONE_HASH);
     location.reload();
   }
-  runCartJob().catch((e) => console.warn('CartWise:', e));
+  runCartJob().catch((e) => console.warn('Eksipno Kalathi:', e));
 
   // Both sites can change page without a full load. Rather than checking all the
   // time, look when the browser says the address changed (and a few times just

@@ -375,6 +375,8 @@ const bgBusy = (id) => Date.now() - (state.bgLookups[id] || 0) < 90000;
 
 const offerJobs = new Map();
 function loadOffers(id, force = false) {
+  // no site access to skroutz.gr: nothing can be read (the note at the top says so, see renderSkAccess)
+  if (state.skAccess === false) return Promise.resolve();
   const cached = state.offers[id];
   if (!force && cached && Date.now() - cached.ts < CACHE_TTL) return Promise.resolve();
   if (!force && bgBusy(id)) return Promise.resolve();
@@ -415,7 +417,8 @@ async function loadBp(id, force = false) {
   if (!ph && state.settings.bestprice === false) return;
   if (!force && bgBusy(id)) return; // the background is matching it right now
   const started = state.bp[id]; // the record this lookup is for
-  let rec = started || (ph ? { v: BP_VER, item: { ...item.bpItem }, candidates: [], searched: true, confident: true, manual: true } : {});
+  // a copy: the saved record changes only once everything is read (see the end)
+  let rec = started ? { ...started, item: started.item && { ...started.item } } : (ph ? { v: BP_VER, item: { ...item.bpItem }, candidates: [], searched: true, confident: true, manual: true } : {});
   const fresh = rec.offers && Date.now() - rec.offersTs < CACHE_TTL;
   if (!force && (fresh || (rec.searched && !rec.item))) return;
   state.bpStatus[id] = 'loading';
@@ -444,7 +447,7 @@ async function loadBp(id, force = false) {
       const page = await fetchBpOffers(rec.item.url);
       rec.offers = page.offers;
       rec.offersTs = Date.now();
-      if (!rec.item.name) rec.item.name = page.name || (await fetchItemMeta(rec.item.url)).name || 'BestPrice product';
+      if (!rec.item.name) rec.item.name = page.name || (await fetchItemMeta(rec.item.url).catch(() => ({}))).name || 'BestPrice product';
     }
     if (replaced()) return;
     state.bp[id] = rec;
@@ -1134,7 +1137,8 @@ function confirmCart(items, sol, from, key) {
       // changed: the question now shows the new order, which the user confirms in turn
       order = { items: skroutzItems(now), sol: now, key: orderKey(now) };
       draw();
-      msg.textContent = order.items.length ? t('resultChanged') : t('nothingToAddNow');
+      // something to confirm only when something can go into the cart
+      msg.textContent = order.items.some((i) => !i.choice) ? t('resultChanged') : t('nothingToAddNow');
     });
   });
   dlg.addEventListener('close', () => {
@@ -1198,6 +1202,8 @@ async function latestSol(from) {
 function cartButton(sol, from) {
   const items = skroutzItems(sol);
   if (!items.length) return null;
+  // every one of its shops asks for a size or option first: nothing to put in the cart from here
+  if (!items.some((i) => !i.choice)) return h('div', { class: 'r-note' }, t('allNeedChoice'));
   const mixed = sol.shipments.some((s) => s.key.startsWith('sbp'));
   const key = orderKey(sol);
   return h('div', { class: 'r-actions' },

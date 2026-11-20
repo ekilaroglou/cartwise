@@ -322,33 +322,38 @@
     const asked = location.hash === '#eksipno-kalathi'; // the page the popup opened
     if (asked || location.hash === DONE_HASH) history.replaceState(null, '', location.pathname + location.search);
 
-    // After the reload that follows a finished order: say what happened, once
-    // (also when that reload went through the browser check and lost DONE_HASH).
-    const { [RESULT_KEY]: done, cartJob } = await chrome.storage.local.get([RESULT_KEY, 'cartJob']);
-    if (done) {
-      await chrome.storage.local.remove(RESULT_KEY);
-      if (Date.now() - done.ts < 120000) showResult(done.result, T);
-    }
-    if (!cartJob || !Array.isArray(cartJob.items)) return;
-    if (Date.now() - cartJob.ts > JOB_FRESH) {
+    // what a finished order did (shown after the reload that follows it), and an order to do
+    const { [RESULT_KEY]: done, cartJob: stored } = await chrome.storage.local.get([RESULT_KEY, 'cartJob']);
+    let cartJob = stored && Array.isArray(stored.items) ? stored : null;
+    if (cartJob && Date.now() - cartJob.ts > JOB_FRESH) {
       // confirmed too long ago (prices may have changed since): not done, and said so where it was meant to run
       await chrome.storage.local.remove('cartJob');
       if (asked) cartBox([T.tooOld], T.close);
-      return;
+      cartJob = null;
     }
-    // A "checking your browser" page has no token yet: wait for the real page,
-    // saying so after a moment. If it does not come, say that too; the order
-    // stays, so reloading the page within a few minutes tries again.
+    const fresh = done && Date.now() - done.ts < 120000;
+    if (done && !fresh) await chrome.storage.local.remove(RESULT_KEY);
+    if (!fresh && !cartJob) return;
+    // A "checking your browser" page has no token yet: wait for the real page
+    // before anything (the summary too: on that page it would be gone with it),
+    // saying so after a moment when there is an order. If it does not come, say
+    // that too; the order stays, so reloading the page within a few minutes tries again.
     let token = null;
     for (let i = 0; i < 60 && !(token = document.querySelector('meta[name="csrf-token"]')?.content); i++) {
-      if (i === 3) cartBox([T.waiting]);
+      if (i === 3 && cartJob) cartBox([T.waiting]);
       await pause(1000);
     }
-    if (!token) { cartBox([T.notLoaded], T.close); return; }
+    if (!token) { if (cartJob) cartBox([T.notLoaded], T.close); return; }
+    // After the reload that follows a finished order: say what happened, once.
+    if (fresh) {
+      await chrome.storage.local.remove(RESULT_KEY);
+      showResult(done.result, T);
+    }
+    if (!cartJob) return;
     // never run twice, and never once it has run out (checked again: the wait above can take a minute)
     const claim = await claimJob(cartJob.ts);
     if (claim === 'old') { cartBox([T.tooOld], T.close); return; }
-    if (claim !== 'ok') return;
+    if (claim !== 'ok') { if (!fresh) document.getElementById('sco-cart-box')?.remove(); return; } // another cart tab took it
 
     const call = cartApi(token);
     const items = cartJob.items;

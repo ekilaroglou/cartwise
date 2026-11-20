@@ -17,16 +17,21 @@ async function lookup({ id, url, name, bp }) {
   };
   if (!bp) return out;
 
-  // the same steps as the popup's loadBp
-  const m = await findMatch({ name: productName, mpn: (meta && meta.mpn) || '', brand: (meta && meta.brand) || '', titles: sl.titles || [] });
-  const rec = { v: BP_VER, ...m, searched: true, offersTs: m.offers ? Date.now() : 0 };
-  if (rec.item && !rec.offers) {
-    const page = await fetchBpOffers(rec.item.url);
-    rec.offers = page.offers;
-    rec.offersTs = Date.now();
-    if (!rec.item.name) rec.item.name = page.name || '';
+  // the same steps as the popup's loadBp; if BestPrice does not answer, the Skroutz
+  // prices above are still kept, and the popup looks the product up on BestPrice itself
+  try {
+    const m = await findMatch({ name: productName, mpn: (meta && meta.mpn) || '', brand: (meta && meta.brand) || '', titles: sl.titles || [] });
+    const rec = { v: BP_VER, ...m, searched: true, offersTs: m.offers ? Date.now() : 0 };
+    if (rec.item && !rec.offers) {
+      const page = await fetchBpOffers(rec.item.url);
+      rec.offers = page.offers;
+      rec.offersTs = Date.now();
+      if (!rec.item.name) rec.item.name = page.name || '';
+    }
+    out.bp = rec;
+  } catch (e) {
+    console.warn('Eksipno Kalathi background lookup (BestPrice):', id, e);
   }
-  out.bp = rec;
   return out;
 }
 

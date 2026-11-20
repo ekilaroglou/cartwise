@@ -4,11 +4,11 @@
   --text: #1c1d22;
   --muted: #6b6f7b;
   --line: #e4e5ea;
-  /* Eksipno Kalathi green (the icon): buttons, the open tab, switches, links */
-  --accent: #08785e;
-  --accent-hover: #066150;
-  --accent-text: #08785e;
-  --accent-soft: #e3f5ee;
+  /* Eksipno Kalathi orange (the icon, close to Skroutz's): buttons, the open tab, switches, links */
+  --accent: #ee7a1c;
+  --accent-hover: #d9650f;
+  --accent-text: #c2560c;
+  --accent-soft: #fff1e2;
   /* warnings (amber), also the Skroutz badge (Skroutz's own orange) */
   --warn-text: #b45309;
   --warn-soft: #fff1e2;
@@ -29,8 +29,8 @@
     --text: #eceef3;
     --muted: #9a9fad;
     --line: #33363f;
-    --accent-text: #4fd1a5;
-    --accent-soft: #133a30;
+    --accent-text: #ffa45c;
+    --accent-soft: #3a2a17;
     --warn-text: #f5a35b;
     --warn-soft: #3a2a17;
     --bp-text: #c4b5fd;

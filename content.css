@@ -6,17 +6,17 @@
   padding: 10px 16px;
   border: 0;
   border-radius: 999px;
-  background: #08785e; /* Eksipno Kalathi green (the icon) */
+  background: #ee7a1c; /* Eksipno Kalathi orange (the icon) */
   color: #fff;
   font: 600 14px/1.2 "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
   box-shadow: 0 4px 14px rgba(0, 0, 0, .25);
   cursor: pointer;
   transition: transform .12s ease, background .12s ease;
 }
-#sco-add-button:hover { background: #066150; transform: translateY(-1px); }
-/* in the list already: white with a green outline, so the two states differ at a glance */
-#sco-add-button.sco-added { background: #fff; color: #08785e; box-shadow: inset 0 0 0 2px #08785e, 0 4px 14px rgba(0, 0, 0, .25); }
-#sco-add-button.sco-added:hover { background: #e3f5ee; }
+#sco-add-button:hover { background: #d9650f; transform: translateY(-1px); }
+/* in the list already: white with an orange outline, so the two states differ at a glance */
+#sco-add-button.sco-added { background: #fff; color: #c2560c; box-shadow: inset 0 0 0 2px #ee7a1c, 0 4px 14px rgba(0, 0, 0, .25); }
+#sco-add-button.sco-added:hover { background: #fff1e2; }
 #sco-add-button[hidden] { display: none; }
 
 /* "Add to Skroutz cart" progress / result, on the Skroutz cart page */

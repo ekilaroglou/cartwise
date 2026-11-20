@@ -348,6 +348,7 @@ function saveBp() {
 const metaJobs = new Map();
 /** Fill in a cart item's name, picture and part number (one request at a time per product). */
 function fetchMeta(item) {
+  if (state.skAccess === false) return Promise.resolve(); // no site access to skroutz.gr
   if (!metaJobs.has(item.id)) metaJobs.set(item.id, readMeta(item).finally(() => metaJobs.delete(item.id)));
   return metaJobs.get(item.id);
 }
@@ -520,6 +521,7 @@ function pasteMatch(id, text) {
 async function resolvePh(phId) {
   const ph = state.cart.find((p) => p.id === phId);
   if (!ph || state.phStatus[phId] === 'loading') return;
+  if (state.skAccess === false) return; // no site access to skroutz.gr: nothing to search with
   state.phStatus[phId] = 'loading';
   render();
   try {
@@ -1385,8 +1387,12 @@ function compute() {
   const phs = state.cart.filter(isPh);
   const pending = c.real.filter((p) => !state.offers[p.id]);
 
+  // No site access to skroutz.gr: what is not read yet cannot be (the note at the top
+  // says why), so the results say so instead of waiting for it.
+  if (state.skAccess === false && (pending.length || phs.some((p) => !p.searched))) {
+    c.block = t('skAccessBlock');
   // a product added from BestPrice blocks the results only until its first lookup
-  if (phs.some((p) => !p.searched && state.phStatus[p.id] !== 'error')) {
+  } else if (phs.some((p) => !p.searched && state.phStatus[p.id] !== 'error')) {
     c.wait = true;
     c.block = dots(t('findingSkProduct'));
   } else if (pending.length) {
@@ -1749,7 +1755,7 @@ function renderResults() {
   // what is still loading, in the line under the title (so nothing moves)
   const prog = [];
   const got = c.real.filter((p) => state.offers[p.id]).length;
-  if (got < c.real.length) prog.push(t('progPrices', { a: got, b: c.real.length }));
+  if (got < c.real.length && state.skAccess !== false) prog.push(t('progPrices', { a: got, b: c.real.length }));
   if (c.bpOn && !noAccess && c.busy) {
     const done = c.recs.filter((r) => r.status !== 'loading' && (r.rec.searched || r.rec.item || r.status === 'error')).length;
     prog.push(t('progBp', { a: done, b: n }));

@@ -52,8 +52,8 @@ Upload `dist/eksipno-kalathi-<version>.zip`.
 > Το Eksipno Kalathi είναι ανεξάρτητο έργο και δεν συνδέεται με το Skroutz ή το BestPrice.
 
 ### Graphics
-- **Store icon, 128×128:** `store/logo-128.png` (a 96 px icon with 16 px of transparent margin, as the store asks). The icon's source is `icon.svg` (and `icon-16.svg` for the toolbar size).
-- **Screenshots:** at least one, 1280×800 or 640×400. `store/screenshot-1-en.png` (1280×800): the real popup with the cheapest Skroutz result, beside a short description. Its popup is in English, so it suits the English listing; for the Greek listing use it too, or a Greek one made the same way from a screenshot of the popup in Greek.
+- **Store icon, 128×128:** `store/logo-128.png` (a 96 px icon with 16 px of transparent margin, as the store asks). The icon's source is `icon-source.png`.
+- **Screenshots:** at least one, 1280×800 or 640×400; upload all three, in this order: `store/screenshot-1-en.png` (the cheapest Skroutz result), `store/screenshot-2-en.png` (the BestPrice comparison), `store/screenshot-3-en.png` (the settings). They show the real popup in English; use the same ones for the Greek listing.
 - **Small promo tile, 440×280:** `store/promo-440x280.png`. The dashboard says whether it is required for your listing.
 
 ### Privacy practices tab
@@ -105,5 +105,5 @@ Paste this into the notes field:
 ---
 
 ## Risks to know about
-- **Skroutz's and BestPrice's brands.** The name, Eksipno Kalathi, uses no other company's brand. The descriptions and images name Skroutz and BestPrice only to say what the extension works with, and say that it is not affiliated with them; the icon is not Skroutz's (it is green, not Skroutz's orange).
+- **Skroutz's and BestPrice's brands.** The name, Eksipno Kalathi, uses no other company's brand. The descriptions and images name Skroutz and BestPrice only to say what the extension works with, and say that it is not affiliated with them; the icon is the extension's own (a cart with a brain), though orange like Skroutz.
 - **The extension depends on the sites' own pages and requests.** If Skroutz or BestPrice change them, parts can stop working until updated. They could also object to automated reading of their pages. Neither store checks this, but it can lead to a takedown request.

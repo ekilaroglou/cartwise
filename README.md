@@ -76,4 +76,4 @@ These are the rules Skroutz shows on its product pages and help centre; the fina
 - `background.js`, `offscreen.*` – the background lookup for products added with the page button (`lib/skroutz.js` reads Skroutz pages for it and for the popup).
 - `popup.*` – the popup. `content.*` – the button on product pages, and the step that puts the chosen offers in the Skroutz cart.
 - `pack.ps1` – makes `dist/eksipno-kalathi-<version>.zip`, the file to upload to the Chrome Web Store and Edge Add-ons. `store/` – store logos and what to fill in when publishing (`store/STORE.md`).
-- `icon.svg`, `icon-16.svg` – the icon's source; the PNGs in `icons/` and `store/` are made from them (`icon-16.svg` is the 16 px toolbar size, without the arrow).
+- `icon-source.png` – the icon at full size (612 px, transparent outside its rounded square); the PNGs in `icons/` and `store/` are made from it. Not part of the extension package.
